@@ -1,0 +1,19 @@
+# Media files
+*.avi
+*.mp4
+*.mkv
+*.mov
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Python / Virtual Environment
+__pycache__/
+*.pyc
+venv/
+.env
+
+video_upscaling_technical_plan.md
