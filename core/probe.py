@@ -13,11 +13,32 @@ from typing import Any, List, Optional, Tuple
 
 
 def get_binary_path(name: str) -> str:
-    """Resolve executable path, preferring workspace root binaries over system PATH."""
+    """Resolve executable path, preferring workspace root binaries and standard install paths over system PATH."""
     current_dir = Path(__file__).resolve().parent.parent
     local_binary = current_dir / f"{name}.exe" if os.name == "nt" else current_dir / name
     if local_binary.is_file():
         return str(local_binary)
+
+    # Check bin/ and bin/<name>/ subdirectories
+    bin_candidates = [
+        current_dir / "bin" / (f"{name}.exe" if os.name == "nt" else name),
+        current_dir / "bin" / name / (f"{name}.exe" if os.name == "nt" else name),
+    ]
+    for bc in bin_candidates:
+        if bc.is_file():
+            return str(bc)
+
+    # Check common system install locations on Windows (e.g. for VapourSynth)
+    if os.name == "nt":
+        std_paths = [
+            Path(r"C:\Program Files\VapourSynth") / f"{name}.exe",
+            Path(r"C:\Program Files\VapourSynth\core") / f"{name}.exe",
+            Path(r"C:\Program Files (x86)\VapourSynth") / f"{name}.exe",
+            Path(r"C:\Program Files (x86)\VapourSynth\core") / f"{name}.exe",
+        ]
+        for sp in std_paths:
+            if sp.is_file():
+                return str(sp)
 
     system_binary = shutil.which(name)
     if system_binary:

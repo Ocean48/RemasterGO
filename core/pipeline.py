@@ -11,10 +11,12 @@ from typing import Optional
 
 from PySide6.QtCore import QThread, Signal
 
+from core.ai_upscaler import is_ai_binary_available, run_ai_segment_upscale
 from core.cache_manager import EngineCacheManager
 from core.checkpoint import CheckpointManager, SegmentInfo
 from core.filtergraph import FiltergraphBuilder
-from core.probe import MediaMetadata, StrategyConfig, probe_media
+from core.probe import MediaMetadata, StrategyConfig, get_binary_path, probe_media
+from core.vapoursynth_builder import VapourSynthScriptBuilder, is_vspipe_available
 
 
 class PipelineWorker(QThread):
@@ -42,11 +44,23 @@ class PipelineWorker(QThread):
         self.media_info: Optional[MediaMetadata] = None
         self.cache_mgr = EngineCacheManager()
         self.checkpoint_mgr: Optional[CheckpointManager] = None
+        self._max_emitted_frame = 0
+
+    def _emit_monotonic_progress(self, current_frame: int, total_frames: int, fps: float, stage: str):
+        """Emit progress signal ensuring current_frame is monotonic and never regresses backwards."""
+        self._max_emitted_frame = max(self._max_emitted_frame, current_frame)
+        self.sig_progress.emit(
+            self._max_emitted_frame,
+            total_frames,
+            fps,
+            stage
+        )
 
     def run(self):
         """Main execution sequence."""
         try:
             self._is_cancelled = False
+            self._max_emitted_frame = 0
             self.sig_status_change.emit("Analyzing media and PTS timecodes...")
             self.sig_log.emit("Stage 1: Probing media metadata and PTS timestamps...")
 
@@ -65,14 +79,15 @@ class PipelineWorker(QThread):
                 self.config.deinterlace = True
 
             # Stage 1b: Engine Cache Check
-            self.sig_log.emit("Stage 1b: Checking TensorRT engine cache...")
+            self.sig_log.emit("Stage 1b: Checking TensorRT engine cache and downloaded models...")
             engine_info = self.cache_mgr.get_engine_info(
                 self.config.model_name,
                 (self.media_info.width, self.media_info.height),
                 fp16=True
             )
+            status_desc = "Cached Engine" if engine_info.exists else ("Downloaded Model" if engine_info.source_model_path else "Uncached (Filtergraph Fallback)")
             self.sig_log.emit(
-                f"Engine key: {engine_info.cache_key} (GPU: {engine_info.gpu_name}, Status: {'Cached' if engine_info.exists else 'Initialized'})"
+                f"Engine key: {engine_info.cache_key} (GPU: {engine_info.gpu_name}, Status: {status_desc})"
             )
 
             # Stage 2-4: Segment Planning & Execution
@@ -148,7 +163,192 @@ class PipelineWorker(QThread):
         total_job_frames: int,
         previously_rendered_frames: int
     ) -> int:
-        """Execute a single video segment through the FFmpeg filtergraph pipeline."""
+        """Execute a single segment via VapourSynth TensorRT, Native Real-ESRGAN GPU Engine, or FFmpeg fallback."""
+        engine_info = self.cache_mgr.get_engine_info(
+            model_name=self.config.model_name,
+            input_resolution=(self.media_info.width, self.media_info.height),
+            fp16=True
+        )
+
+        # Priority 1: VapourSynth + vs-mlrt TensorRT Zero-Copy VRAM Pipeline (if .engine exists and vspipe is available)
+        if engine_info.exists:
+            if is_vspipe_available():
+                try:
+                    self.sig_log.emit(f"Running VapourSynth TensorRT Zero-Copy GPU pipeline for segment {seg.index + 1}...")
+                    return self._execute_segment_vspipe(seg, total_job_frames, previously_rendered_frames, tiles=1)
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "out of memory" in err_str or "oom" in err_str or "cuda" in err_str:
+                        self.sig_log.emit("VRAM OOM detected during inference! Retrying with 2x2 spatial tiling (tiles=4)...")
+                        try:
+                            return self._execute_segment_vspipe(seg, total_job_frames, previously_rendered_frames, tiles=4)
+                        except Exception as retry_err:
+                            self.sig_log.emit(f"Tiled VapourSynth inference failed: {retry_err}. Falling back to Native GPU AI engine.")
+                    else:
+                        self.sig_log.emit(f"VapourSynth engine pipeline failed ({e}). Falling back to Native GPU AI engine.")
+            else:
+                self.sig_log.emit(
+                    f"[Engine Notice] Compiled TensorRT engine '{Path(engine_info.engine_path).name}' found, but VapourSynth (vspipe) is not installed on the system. "
+                    f"Falling back to Real-ESRGAN Vulkan engine."
+                )
+
+        # Priority 2: Real-ESRGAN Native GPU AI Neural Network Engine (NVIDIA RTX 5060 Ti)
+        if is_ai_binary_available():
+            try:
+                self.sig_log.emit(
+                    f"Running Real-ESRGAN Native GPU AI Neural Network ({self.cache_mgr.gpu_name}) for segment {seg.index + 1}..."
+                )
+
+                def on_ai_progress(cur_f: int, cur_fps: float, stage_label: Optional[str] = None):
+                    overall_f = min(total_job_frames, previously_rendered_frames + cur_f)
+                    current_stage = stage_label if stage_label else f"AI Upscaling Seg {seg.index + 1}"
+                    self._emit_monotonic_progress(
+                        overall_f,
+                        total_job_frames,
+                        cur_fps,
+                        current_stage
+                    )
+
+                return run_ai_segment_upscale(
+                    strategy=self.config,
+                    media=self.media_info,
+                    seg=seg,
+                    log_cb=self.sig_log.emit,
+                    progress_cb=on_ai_progress,
+                    cancel_check=lambda: self._is_cancelled
+                )
+            except Exception as ai_err:
+                self.sig_log.emit(f"GPU AI neural network error: {ai_err}. Falling back to FFmpeg filtergraph.")
+
+        # Priority 3: Fallback to direct FFmpeg filtergraph execution with Contrast Adaptive Sharpening
+        self.sig_log.emit(f"Running fallback FFmpeg filtergraph pipeline for segment {seg.index + 1}...")
+        return self._execute_segment_ffmpeg(seg, total_job_frames, previously_rendered_frames)
+
+    def _execute_segment_vspipe(
+        self,
+        seg: SegmentInfo,
+        total_job_frames: int,
+        previously_rendered_frames: int,
+        tiles: int = 1
+    ) -> int:
+        """Execute segment using vspipe stdout piped into FFmpeg stdin."""
+        if not self.media_info:
+            return 0
+
+        fps = self.media_info.fps or 30.0
+        vpy_dir = Path("cache") / "temp_scripts"
+        vpy_dir.mkdir(parents=True, exist_ok=True)
+        vpy_file = vpy_dir / f"segment_{seg.index:04d}_{tiles}tiles.vpy"
+
+        start_frame = int(round(seg.start_sec * fps)) if seg.start_sec > 0 else 0
+        num_frames = int(round(seg.duration_sec * fps)) if seg.duration_sec > 0 else None
+
+        engine_info = self.cache_mgr.get_engine_info(
+            model_name=self.config.model_name,
+            input_resolution=(self.media_info.width, self.media_info.height),
+            fp16=True,
+            tiles=tiles
+        )
+        target_model_file = engine_info.engine_path if engine_info.exists else (engine_info.source_model_path or engine_info.engine_path)
+
+        VapourSynthScriptBuilder.write_script_file(
+            target_path=str(vpy_file),
+            strategy=self.config,
+            media=self.media_info,
+            engine_path=target_model_file,
+            start_frame=start_frame,
+            num_frames=num_frames,
+            tiles=tiles,
+            fp16=True
+        )
+
+        vspipe_bin = get_binary_path("vspipe")
+        vspipe_cmd = [vspipe_bin, "-y", str(vpy_file.resolve()), "-"]
+
+        ffmpeg_cmd = FiltergraphBuilder.build_piped_ffmpeg_cmd(
+            strategy=self.config,
+            media=self.media_info,
+            output_file=seg.output_path,
+            fps=fps,
+            start_sec=seg.start_sec if self.config.segment_duration_sec > 0 and len(self.checkpoint_mgr.state.segments) > 1 else None,
+            duration_sec=seg.duration_sec if self.config.segment_duration_sec > 0 and len(self.checkpoint_mgr.state.segments) > 1 else None,
+            progress_pipe=True
+        )
+
+        try:
+            self.vspipe_proc = subprocess.Popen(
+                vspipe_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+
+            self.ffmpeg_proc = subprocess.Popen(
+                ffmpeg_cmd,
+                stdin=self.vspipe_proc.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                encoding="utf-8",
+                errors="replace"
+            )
+
+            if self.vspipe_proc.stdout:
+                self.vspipe_proc.stdout.close()
+
+            frame_pattern = re.compile(r"frame=(\d+)")
+            fps_pattern = re.compile(r"fps=([\d\.]+)")
+
+            cur_segment_frame = 0
+            cur_fps = 0.0
+
+            if self.ffmpeg_proc.stdout:
+                for line in self.ffmpeg_proc.stdout:
+                    if self._is_cancelled:
+                        self.terminate_processes()
+                        break
+
+                    line = line.strip()
+                    frame_match = frame_pattern.search(line)
+                    fps_match = fps_pattern.search(line)
+
+                    if frame_match:
+                        cur_segment_frame = int(frame_match.group(1))
+                    if fps_match:
+                        cur_fps = float(fps_match.group(1))
+
+                    if line.startswith("progress=continue") or line.startswith("progress=end"):
+                        overall_frame = min(total_job_frames, previously_rendered_frames + cur_segment_frame)
+                        self._emit_monotonic_progress(
+                            overall_frame,
+                            total_job_frames,
+                            cur_fps,
+                            f"Upscaling Segment {seg.index + 1} (vspipe)"
+                        )
+
+            ret_ffmpeg = self.ffmpeg_proc.wait()
+            _, vspipe_err = self.vspipe_proc.communicate()
+
+            if ret_ffmpeg != 0 and not self._is_cancelled:
+                err_text = vspipe_err.decode("utf-8", errors="replace") if isinstance(vspipe_err, bytes) else str(vspipe_err)
+                raise RuntimeError(f"VapourSynth vspipe failed: {err_text[-500:] if err_text else 'Unknown error'}")
+
+            return cur_segment_frame
+
+        finally:
+            if vpy_file.is_file():
+                try:
+                    vpy_file.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    def _execute_segment_ffmpeg(
+        self,
+        seg: SegmentInfo,
+        total_job_frames: int,
+        previously_rendered_frames: int
+    ) -> int:
+        """Execute a single video segment through the direct FFmpeg filtergraph pipeline."""
         if not self.media_info:
             return 0
 
@@ -194,7 +394,7 @@ class PipelineWorker(QThread):
 
                 if line.startswith("progress=continue") or line.startswith("progress=end"):
                     overall_frame = min(total_job_frames, previously_rendered_frames + cur_segment_frame)
-                    self.sig_progress.emit(
+                    self._emit_monotonic_progress(
                         overall_frame,
                         total_job_frames,
                         cur_fps,

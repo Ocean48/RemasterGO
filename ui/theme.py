@@ -166,18 +166,67 @@ QHeaderView::section {
 
 /* Progress Bars */
 QProgressBar {
-    background-color: #1a1a24;
-    border: 1px solid #2c2c3b;
+    background-color: #161622;
+    border: 1px solid #2d2d3e;
     border-radius: 6px;
     text-align: center;
-    color: #f9fafb;
+    color: #f8fafc;
     font-weight: 600;
-    height: 18px;
+    font-size: 11px;
+    height: 20px;
 }
 
 QProgressBar::chunk {
     background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284c7, stop:1 #38bdf8);
     border-radius: 5px;
+}
+
+QProgressBar#ActiveJobProgressBar {
+    background-color: #12121c;
+    border: 1px solid #0284c7;
+    border-radius: 8px;
+    text-align: center;
+    color: #ffffff;
+    font-weight: 700;
+    font-size: 12px;
+    height: 26px;
+}
+
+QProgressBar#ActiveJobProgressBar::chunk {
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284c7, stop:0.5 #0ea5e9, stop:1 #38bdf8);
+    border-radius: 7px;
+}
+
+QProgressBar#QueueProgressBar {
+    background-color: #14141e;
+    border: 1px solid #2c3a38;
+    border-radius: 6px;
+    text-align: center;
+    color: #e2e8f0;
+    font-weight: 600;
+    font-size: 11px;
+    height: 18px;
+}
+
+QProgressBar#QueueProgressBar::chunk {
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0f766e, stop:0.5 #14b8a6, stop:1 #2dd4bf);
+    border-radius: 5px;
+}
+
+QProgressBar#TableProgressBar {
+    background-color: #171724;
+    border: 1px solid #29293a;
+    border-radius: 5px;
+    text-align: center;
+    color: #f1f5f9;
+    font-weight: 600;
+    font-size: 10px;
+    height: 14px;
+}
+
+QProgressBar#TableProgressBar::chunk {
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284c7, stop:1 #38bdf8);
+    border-radius: 4px;
 }
 
 /* ScrollBars */
@@ -233,4 +282,39 @@ QLabel#GpuBadge {
     font-weight: 600;
     font-size: 12px;
 }
+
+/* Tab Widget & Tab Bar */
+QTabWidget::pane {
+    border: 1px solid #282838;
+    background-color: #161620;
+    border-radius: 8px;
+    top: -1px;
+    padding: 8px;
+}
+
+QTabBar::tab {
+    background-color: #1c1c28;
+    color: #94a3b8;
+    border: 1px solid #2b2b3d;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    padding: 9px 20px;
+    margin-right: 4px;
+    font-weight: 600;
+    font-size: 13px;
+}
+
+QTabBar::tab:selected {
+    background-color: #161620;
+    color: #38bdf8;
+    border-top: 2px solid #0284c7;
+    border-bottom: 1px solid #161620;
+}
+
+QTabBar::tab:hover:!selected {
+    background-color: #242436;
+    color: #f1f5f9;
+}
+
 """

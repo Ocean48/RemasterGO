@@ -135,13 +135,13 @@ class JobQueueController(QObject):
 
     def _on_worker_progress(self, cur_frame: int, total_frames: int, fps: float, stage: str):
         if self.active_job:
-            self.active_job.current_frame = cur_frame
-            self.active_job.total_frames = total_frames
+            self.active_job.current_frame = max(self.active_job.current_frame, cur_frame)
+            self.active_job.total_frames = max(self.active_job.total_frames, total_frames)
             self.active_job.current_fps = fps
             self.active_job.stage = stage
-            pct = (cur_frame / total_frames * 100.0) if total_frames > 0 else 0.0
-            self.active_job.progress_percent = min(100.0, pct)
-            self.sig_job_progress.emit(self.active_job.id, cur_frame, total_frames, fps, stage)
+            pct = (self.active_job.current_frame / self.active_job.total_frames * 100.0) if self.active_job.total_frames > 0 else 0.0
+            self.active_job.progress_percent = min(100.0, max(self.active_job.progress_percent, pct))
+            self.sig_job_progress.emit(self.active_job.id, self.active_job.current_frame, self.active_job.total_frames, fps, stage)
 
     def _on_worker_status(self, status_msg: str):
         if self.active_job:

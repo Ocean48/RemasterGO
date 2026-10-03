@@ -14,12 +14,14 @@ RemasterGO/
 │   └── <job_stem>/         # Segment chunks (segment_XXXX.mkv) & job_checkpoint.json
 ├── core/                   # Core engine pipeline
 │   ├── __init__.py
-│   ├── cache_manager.py    # TensorRT & model cache management (MD5 hashing)
+│   ├── cache_manager.py    # TensorRT & model cache management (MD5 hashing, trtexec compilation)
 │   ├── checkpoint.py       # Segment chunking, recovery state & lossless concat
 │   ├── filtergraph.py      # Deinterlace, denoise, blend, grain & encoding CLI builder
 │   ├── job_queue.py        # Multi-job queue controller and state tracking
-│   ├── pipeline.py         # PipelineWorker (QThread) subprocess orchestration
-│   └── probe.py            # ffprobe media analysis, PTS tracking & scene detection
+│   ├── model_downloader.py # AI model catalog, manager & async downloader thread
+│   ├── pipeline.py         # PipelineWorker (QThread) dual-process (vspipe -> ffmpeg) orchestration
+│   ├── probe.py            # ffprobe media analysis, PTS tracking & scene detection
+│   └── vapoursynth_builder.py # VapourSynth .vpy script generation (QTGMC, KNLMeansCL, vs-mlrt)
 ├── output/                 # The ONLY final destination directory for upscaled videos
 ├── tests/                  # Automated pytest unit & integration test suite
 ├── ui/                     # PySide6 desktop GUI
@@ -95,10 +97,11 @@ RemasterGO/
 & ".\.venv\Scripts\python.exe" main.py
 ```
 
-* Drag and drop video files (`.avi`, `.mp4`, `.mkv`, `.mov`) into the queue table.
-* Choose target resolution (1080p, 1440p, 4K, 2x, 4x), AI model, and encoder.
-* Adjust micro-texture blend ratio (slider) and film grain intensity.
-* Click **Start Queue Processing**. Monitor live FPS, elapsed time, ETA, and logs.
+The GUI features a 4-tab interface designed to prevent UI crowding and overlapping elements:
+* **Queue & Processing**: Drag and drop video files (`.avi`, `.mp4`, `.mkv`, `.mov`), monitor live inference FPS, ETA, active job progress bar, and control execution (Start / Pause / Cancel).
+* **Restoration Settings**: Spacious controls for target resolution (1080p, 1440p, 4K, 2x, 4x), AI model selection, QTGMC deinterlace auto-detect, analog tape denoise, scene boundary detection, 80/20 micro-texture blend slider, dynamic film grain slider, NVENC encoder selection, and output destination.
+* **AI Models & Engines**: Catalog of pretrained models (Real-ESRGAN x4 Plus, Real-ESRGAN x4 Anime, Real-ESRGANv2 Anime 2x, SPAN 4x, Compact 2x) with one-click download, file size display, deletion, and compiled TensorRT engine inspection table.
+* **Execution Logs**: Full-height monospace console with log filtering, live stdout/stderr capture, clear console, and file export.
 
 ### 2. Headless CLI Processing
 
@@ -120,6 +123,12 @@ RemasterGO/
 | `-c, --chunk-duration` | Checkpoint segment duration in seconds (`0` for single pass) | `300.0` (5 minutes) |
 | `--deinterlace` | Force deinterlacing on | Auto-detected |
 | `--no-denoise` | Disable spatial/temporal analog tape denoising | False |
+| `--scene-cuts` | Detect scene cut boundaries and snap checkpoints | False |
+| `--list-models` | List available and installed AI models in catalog | False |
+| `--download-model <ID>` | Download pretrained model weights (`<id>` or `all`) | None |
+| `--list-engines` | List compiled TensorRT hardware engines in cache | False |
+| `--build-engine <file>` | Compile ONNX model into TensorRT .engine binary | None |
+| `--workspace-mb <MB>` | Max workspace memory in MB for TensorRT compilation | `2048` |
 
 ---
 

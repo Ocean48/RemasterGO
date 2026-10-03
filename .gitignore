@@ -26,3 +26,4 @@ ffprobe.exe
 output/
 cache/
 .pytest_cache/
+bin/
