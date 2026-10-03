@@ -1135,8 +1135,7 @@ class MainWindow(QMainWindow):
         self.card_stage.set_value(stage)
 
         pct = (cur_frame / total_frames * 100.0) if total_frames > 0 else 0.0
-        cur_bar_val = self.bar_current.value()
-        new_bar_val = max(cur_bar_val, int(pct))
+        new_bar_val = max(0, min(100, int(pct)))
         self.bar_current.setValue(new_bar_val)
         self.bar_current.setFormat(f"{pct:.1f}% ({cur_frame:,} / {total_frames:,} frames)")
         self._update_queue_progress()
@@ -1147,7 +1146,7 @@ class MainWindow(QMainWindow):
                 pbar = self.table_queue.cellWidget(row, 6)
                 if isinstance(pbar, QProgressBar):
                     pbar.setValue(new_bar_val)
-                    pbar.setFormat(f"{int(pct)}%")
+                    pbar.setFormat(f"{pct:.1f}%")
                 break
 
         if fps > 0 and total_frames > cur_frame:

@@ -113,7 +113,13 @@ class PipelineWorker(QThread):
             # Calculate frames already rendered in completed segments
             for seg in self.checkpoint_mgr.state.segments:
                 if seg.status == "completed":
+                    if seg.rendered_frames <= 0 and fps > 0:
+                        seg.rendered_frames = int(round(seg.duration_sec * fps))
                     rendered_total_frames += seg.rendered_frames
+
+            if rendered_total_frames > 0:
+                self.sig_log.emit(f"Resuming pipeline from frame {rendered_total_frames}/{total_frames}...")
+                self._emit_monotonic_progress(rendered_total_frames, total_frames, 0.0, "Resuming Checkpoint")
 
             # Execute pending segments
             for seg in pending_segments:
@@ -137,6 +143,9 @@ class PipelineWorker(QThread):
 
                 if self._is_cancelled:
                     return
+
+                if seg_frames <= 0 and seg.duration_sec > 0 and fps > 0:
+                    seg_frames = int(round(seg.duration_sec * fps))
 
                 rendered_total_frames += seg_frames
                 self.checkpoint_mgr.mark_segment_completed(seg.index, rendered_frames=seg_frames)
@@ -263,7 +272,7 @@ class PipelineWorker(QThread):
         )
 
         vspipe_bin = get_binary_path("vspipe")
-        vspipe_cmd = [vspipe_bin, "-y", str(vpy_file.resolve()), "-"]
+        vspipe_cmd = [vspipe_bin, str(vpy_file.resolve()), "-"]
 
         ffmpeg_cmd = FiltergraphBuilder.build_piped_ffmpeg_cmd(
             strategy=self.config,
@@ -295,6 +304,7 @@ class PipelineWorker(QThread):
 
             if self.vspipe_proc.stdout:
                 self.vspipe_proc.stdout.close()
+                self.vspipe_proc.stdout = None
 
             frame_pattern = re.compile(r"frame=(\d+)")
             fps_pattern = re.compile(r"fps=([\d\.]+)")
@@ -327,13 +337,24 @@ class PipelineWorker(QThread):
                         )
 
             ret_ffmpeg = self.ffmpeg_proc.wait()
-            _, vspipe_err = self.vspipe_proc.communicate()
+            vspipe_err = b""
+            if self.vspipe_proc:
+                if self.vspipe_proc.poll() is None:
+                    try:
+                        _, vspipe_err = self.vspipe_proc.communicate()
+                    except Exception:
+                        pass
+                elif self.vspipe_proc.stderr:
+                    try:
+                        vspipe_err = self.vspipe_proc.stderr.read()
+                    except Exception:
+                        pass
 
             if ret_ffmpeg != 0 and not self._is_cancelled:
                 err_text = vspipe_err.decode("utf-8", errors="replace") if isinstance(vspipe_err, bytes) else str(vspipe_err)
                 raise RuntimeError(f"VapourSynth vspipe failed: {err_text[-500:] if err_text else 'Unknown error'}")
 
-            return cur_segment_frame
+            return cur_segment_frame if cur_segment_frame > 0 else (num_frames if num_frames else int(round(seg.duration_sec * fps)))
 
         finally:
             if vpy_file.is_file():
@@ -408,7 +429,8 @@ class PipelineWorker(QThread):
                 stderr_out = self.ffmpeg_proc.stderr.read()
             raise RuntimeError(f"FFmpeg failed with exit code {ret}: {stderr_out[-500:] if stderr_out else 'Unknown error'}")
 
-        return cur_segment_frame
+        fallback_frames = int(round(seg.duration_sec * (self.media_info.fps or 30.0))) if seg.duration_sec > 0 else 0
+        return cur_segment_frame if cur_segment_frame > 0 else fallback_frames
 
     def pause(self):
         """Pause pipeline worker."""

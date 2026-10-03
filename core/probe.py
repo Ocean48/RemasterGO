@@ -19,14 +19,38 @@ def get_binary_path(name: str) -> str:
     if local_binary.is_file():
         return str(local_binary)
 
-    # Check bin/ and bin/<name>/ subdirectories
+    # Check active Python environment site-packages and Scripts
+    import sys
+    py_env_dir = Path(sys.prefix)
+    py_candidates = [
+        py_env_dir / "Scripts" / (f"{name}.exe" if os.name == "nt" else name),
+        py_env_dir / "Lib" / "site-packages" / "vapoursynth" / (f"{name}.exe" if os.name == "nt" else name),
+    ]
+    for pc in py_candidates:
+        if pc.is_file():
+            return str(pc)
+
+    # Check bin/ and bin/<subfolder>/ subdirectories
     bin_candidates = [
         current_dir / "bin" / (f"{name}.exe" if os.name == "nt" else name),
         current_dir / "bin" / name / (f"{name}.exe" if os.name == "nt" else name),
+        current_dir / "bin" / "vapoursynth" / (f"{name}.exe" if os.name == "nt" else name),
+        current_dir / "bin" / "trtexec" / (f"{name}.exe" if os.name == "nt" else name),
+        current_dir / "bin" / "realesrgan" / (f"{name}.exe" if os.name == "nt" else name),
     ]
     for bc in bin_candidates:
         if bc.is_file():
             return str(bc)
+
+    # Search any direct subfolder under bin/
+    bin_dir = current_dir / "bin"
+    if bin_dir.is_dir():
+        target_name = f"{name}.exe" if os.name == "nt" else name
+        for sub in bin_dir.iterdir():
+            if sub.is_dir():
+                candidate = sub / target_name
+                if candidate.is_file():
+                    return str(candidate)
 
     # Check common system install locations on Windows (e.g. for VapourSynth)
     if os.name == "nt":

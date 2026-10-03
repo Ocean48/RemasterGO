@@ -81,3 +81,17 @@ def test_concat_file_generation():
         assert "file '" in content
         assert "segment_0000.mkv" in content
         assert "segment_0001.mkv" in content
+
+
+def test_segment_completed_rendered_frames_retained():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mgr = CheckpointManager(
+            job_dir=tmpdir,
+            input_path="test.avi",
+            final_output_path="out.mkv",
+            total_duration=600.0,
+            segment_duration=300.0
+        )
+        mgr.mark_segment_completed(0, rendered_frames=9000)
+        assert mgr.state.segments[0].status == "completed"
+        assert mgr.state.segments[0].rendered_frames == 9000

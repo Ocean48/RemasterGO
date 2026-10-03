@@ -170,7 +170,7 @@ class CheckpointManager:
         self.validate_existing_segments()
 
     def validate_existing_segments(self):
-        """Verify previously rendered segment files on disk."""
+        """Verify previously rendered segment files on disk and populate frame counts."""
         ffprobe_bin = get_binary_path("ffprobe")
         for seg in self.state.segments:
             seg_path = Path(seg.output_path)
@@ -181,14 +181,18 @@ class CheckpointManager:
                         ffprobe_bin,
                         "-v", "error",
                         "-select_streams", "v:0",
-                        "-show_entries", "stream=codec_name",
+                        "-show_entries", "stream=codec_name,nb_frames",
                         "-of", "csv=p=0",
                         str(seg_path)
                     ]
                     res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                    if res.stdout.strip():
+                    out_text = res.stdout.strip()
+                    if out_text:
                         seg.status = "completed"
                         seg.size_bytes = seg_path.stat().st_size
+                        parts = out_text.split(",")
+                        if len(parts) > 1 and parts[1].isdigit() and int(parts[1]) > 0:
+                            seg.rendered_frames = int(parts[1])
                     else:
                         seg.status = "pending"
                 except Exception:

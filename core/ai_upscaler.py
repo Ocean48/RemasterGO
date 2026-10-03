@@ -88,6 +88,13 @@ def run_ai_segment_upscale(
     job_cache.mkdir(parents=True, exist_ok=True)
     frames_in = job_cache / f"seg_{seg.index:04d}_in"
     frames_out = job_cache / f"seg_{seg.index:04d}_out"
+
+    # Always ensure clean frame scratch directories to avoid leftover frame counts from previous cancelled runs
+    if frames_in.is_dir():
+        shutil.rmtree(frames_in, ignore_errors=True)
+    if frames_out.is_dir():
+        shutil.rmtree(frames_out, ignore_errors=True)
+
     frames_in.mkdir(parents=True, exist_ok=True)
     frames_out.mkdir(parents=True, exist_ok=True)
 
@@ -131,45 +138,60 @@ def run_ai_segment_upscale(
             "-s", str(scale),
             "-m", str(ai_models_dir),
             "-g", "0",
+            "-j", "2:2:2",
             "-f", "png"
         ]
 
         ai_proc = subprocess.Popen(
             ai_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            encoding="utf-8",
-            errors="replace"
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
         )
 
         start_time = time.time()
         last_reported_count = -1
+        last_time = start_time
+        last_frame = 0
         cur_f = 0
         cur_fps = 0.0
 
-        if ai_proc.stdout:
-            while ai_proc.poll() is None:
-                if cancel_check and cancel_check():
-                    ai_proc.terminate()
-                    return 0
-                line = ai_proc.stdout.readline()
+        while ai_proc.poll() is None:
+            if cancel_check and cancel_check():
+                ai_proc.terminate()
+                return 0
+
+            time.sleep(0.1)  # Non-blocking 100ms interval check
+
+            # Count generated output frames in real time directly from scratch directory
+            try:
                 cur_f = sum(1 for entry in os.scandir(frames_out) if entry.name.endswith(".png"))
-                elapsed = time.time() - start_time
-                cur_fps = (cur_f / elapsed) if elapsed > 0.5 else 0.0
-                if cur_f != last_reported_count:
-                    last_reported_count = cur_f
-                    if progress_cb:
-                        progress_cb(cur_f, cur_fps, f"AI Upscaling Seg {seg.index + 1}")
+            except Exception:
+                pass
+
+            now = time.time()
+            dt = now - last_time
+
+            # Compute rolling FPS dynamically over 1-second sliding windows
+            if dt >= 1.0:
+                df = cur_f - last_frame
+                cur_fps = (df / dt) if dt > 0 else 0.0
+                last_time = now
+                last_frame = cur_f
+            elif cur_fps == 0.0 and (now - start_time) > 0.5:
+                cur_fps = (cur_f / (now - start_time)) if cur_f > 0 else 0.0
+
+            if cur_f != last_reported_count:
+                last_reported_count = cur_f
+                if progress_cb:
+                    progress_cb(cur_f, cur_fps, f"AI Upscaling Seg {seg.index + 1}")
 
         ret_ai = ai_proc.wait()
         if ret_ai != 0:
             raise RuntimeError(f"Real-ESRGAN GPU inference failed with exit code {ret_ai}")
 
-        cur_f = sum(1 for entry in os.scandir(frames_out) if entry.name.endswith(".png"))
-        elapsed = time.time() - start_time
-        cur_fps = (cur_f / elapsed) if elapsed > 0.5 else 0.0
+        cur_f = total_frames_in_seg
+        total_elapsed = time.time() - start_time
+        cur_fps = (total_frames_in_seg / total_elapsed) if total_elapsed > 0 else 0.0
         if progress_cb:
             progress_cb(cur_f, cur_fps, f"AI Upscaling Seg {seg.index + 1}")
 
@@ -279,7 +301,7 @@ def run_ai_segment_upscale(
                     cur_enc_fps = float(fps_m.group(1))
                 if line.startswith("progress=continue") or line.startswith("progress=end"):
                     if progress_cb:
-                        progress_cb(cur_enc_frame, cur_enc_fps, f"Encoding Seg {seg.index + 1}")
+                        progress_cb(total_frames_in_seg, cur_enc_fps, f"Encoding Seg {seg.index + 1}")
 
         ret_enc = encode_proc.wait()
         if ret_enc != 0 and not (cancel_check and cancel_check()):

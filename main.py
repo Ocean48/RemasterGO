@@ -286,6 +286,11 @@ def run_gui() -> int:
     app.setApplicationName("RemasterGO")
     app.setOrganizationName("RemasterGO")
 
+    # Set explicit font to prevent QFont::setPointSize <= 0 warning on High-DPI screens
+    from PySide6.QtGui import QFont
+    default_font = QFont("Segoe UI", 10)
+    app.setFont(default_font)
+
     from ui.main_window import MainWindow
     window = MainWindow()
     window.show()
