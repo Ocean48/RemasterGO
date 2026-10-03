@@ -17,3 +17,12 @@ venv/
 .env
 
 video_upscaling_technical_plan.md
+
+# FFmpeg
+ffmpeg.exe
+ffprobe.exe
+
+# Output & Cache
+output/
+cache/
+.pytest_cache/
