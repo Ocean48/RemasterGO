@@ -340,9 +340,15 @@ class EngineCacheManager:
                 "3. Or download NVIDIA TensorRT from https://developer.nvidia.com/tensorrt and add its bin/ folder to PATH."
             )
 
+        in_w, in_h = input_resolution
+        shape_spec = f"input:1x3x{in_h}x{in_w}"
         cmd = [
             trtexec_bin,
             f"--onnx={onnx_model_path}",
+            f"--minShapes={shape_spec}",
+            f"--optShapes={shape_spec}",
+            f"--maxShapes={shape_spec}",
+            f"--shapes={shape_spec}",
             f"--saveEngine={info.engine_path}",
             f"--memPoolSize=workspace:{max_workspace_mb}"
         ]

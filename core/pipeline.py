@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -15,7 +16,7 @@ from core.ai_upscaler import is_ai_binary_available, run_ai_segment_upscale
 from core.cache_manager import EngineCacheManager
 from core.checkpoint import CheckpointManager, SegmentInfo
 from core.filtergraph import FiltergraphBuilder
-from core.probe import MediaMetadata, StrategyConfig, get_binary_path, probe_media
+from core.probe import MediaMetadata, StrategyConfig, detect_scene_cuts, get_binary_path, probe_media
 from core.vapoursynth_builder import VapourSynthScriptBuilder, is_vspipe_available
 
 
@@ -93,6 +94,21 @@ class PipelineWorker(QThread):
             # Stage 2-4: Segment Planning & Execution
             out_stem = Path(self.config.output_path).stem
             job_cache_dir = Path("cache") / out_stem
+
+            # Auto-detect scene cut boundaries if enabled, duration > segment duration, and not pre-computed
+            if (
+                not self.config.scene_cuts
+                and self.config.segment_duration_sec > 0
+                and self.media_info.duration > self.config.segment_duration_sec
+            ):
+                try:
+                    self.sig_log.emit("Scanning media for scene cut boundaries to align checkpoints...")
+                    self.config.scene_cuts = detect_scene_cuts(self.config.input_path, threshold=0.3)
+                    if self.config.scene_cuts:
+                        self.sig_log.emit(f"Detected {len(self.config.scene_cuts)} scene cut boundaries.")
+                except Exception as sc_e:
+                    self.sig_log.emit(f"Scene cut detection skipped: {sc_e}")
+
             scene_cut_times = [sc.pts_time for sc in self.config.scene_cuts]
 
             self.checkpoint_mgr = CheckpointManager(
@@ -178,6 +194,28 @@ class PipelineWorker(QThread):
             input_resolution=(self.media_info.width, self.media_info.height),
             fp16=True
         )
+
+        # On-demand TensorRT engine compilation if ONNX source is present but engine for this resolution is not yet compiled
+        if not engine_info.exists and is_vspipe_available() and self.cache_mgr.is_trtexec_available():
+            onnx_path = engine_info.source_model_path or self.cache_mgr.find_model_source(self.config.model_name)
+            if not onnx_path:
+                onnx_path = self.cache_mgr.find_model_source("realesr-general-x4v3")
+            if onnx_path and onnx_path.lower().endswith(".onnx"):
+                try:
+                    self.sig_log.emit(
+                        f"[TensorRT Auto-Compiler] Compiling TensorRT engine for {self.media_info.width}x{self.media_info.height} "
+                        f"on {self.cache_mgr.gpu_name} (takes ~5s)..."
+                    )
+                    self.sig_status_change.emit("Compiling TensorRT GPU engine on RTX GPU...")
+                    engine_info = self.cache_mgr.compile_engine(
+                        onnx_model_path=onnx_path,
+                        model_name=self.config.model_name,
+                        input_resolution=(self.media_info.width, self.media_info.height),
+                        fp16=True
+                    )
+                    self.sig_log.emit(f"[TensorRT Auto-Compiler] Engine compiled successfully: {Path(engine_info.engine_path).name}")
+                except Exception as comp_err:
+                    self.sig_log.emit(f"[TensorRT Auto-Compiler] Compilation failed ({comp_err}). Falling back.")
 
         # Priority 1: VapourSynth + vs-mlrt TensorRT Zero-Copy VRAM Pipeline (if .engine exists and vspipe is available)
         if engine_info.exists:
@@ -272,7 +310,7 @@ class PipelineWorker(QThread):
         )
 
         vspipe_bin = get_binary_path("vspipe")
-        vspipe_cmd = [vspipe_bin, str(vpy_file.resolve()), "-"]
+        vspipe_cmd = [vspipe_bin, "-c", "y4m", str(vpy_file.resolve()), "-"]
 
         ffmpeg_cmd = FiltergraphBuilder.build_piped_ffmpeg_cmd(
             strategy=self.config,
@@ -306,6 +344,49 @@ class PipelineWorker(QThread):
                 self.vspipe_proc.stdout.close()
                 self.vspipe_proc.stdout = None
 
+            vspipe_stderr_chunks: list[bytes] = []
+            ffmpeg_stderr_chunks: list[str] = []
+
+            def _drain_raw(stream, dest_list):
+                try:
+                    while True:
+                        chunk = stream.read(4096)
+                        if not chunk:
+                            break
+                        dest_list.append(chunk)
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+
+            def _drain_text(stream, dest_list):
+                try:
+                    for line in stream:
+                        dest_list.append(line)
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+
+            t_vspipe_err = threading.Thread(
+                target=_drain_raw,
+                args=(self.vspipe_proc.stderr, vspipe_stderr_chunks),
+                daemon=True
+            )
+            t_ffmpeg_err = threading.Thread(
+                target=_drain_text,
+                args=(self.ffmpeg_proc.stderr, ffmpeg_stderr_chunks),
+                daemon=True
+            )
+            t_vspipe_err.start()
+            t_ffmpeg_err.start()
+
             frame_pattern = re.compile(r"frame=(\d+)")
             fps_pattern = re.compile(r"fps=([\d\.]+)")
 
@@ -337,22 +418,21 @@ class PipelineWorker(QThread):
                         )
 
             ret_ffmpeg = self.ffmpeg_proc.wait()
-            vspipe_err = b""
-            if self.vspipe_proc:
-                if self.vspipe_proc.poll() is None:
-                    try:
-                        _, vspipe_err = self.vspipe_proc.communicate()
-                    except Exception:
-                        pass
-                elif self.vspipe_proc.stderr:
-                    try:
-                        vspipe_err = self.vspipe_proc.stderr.read()
-                    except Exception:
-                        pass
+            ret_vspipe = self.vspipe_proc.wait() if self.vspipe_proc else 0
+            t_vspipe_err.join(timeout=1.0)
+            t_ffmpeg_err.join(timeout=1.0)
 
-            if ret_ffmpeg != 0 and not self._is_cancelled:
-                err_text = vspipe_err.decode("utf-8", errors="replace") if isinstance(vspipe_err, bytes) else str(vspipe_err)
-                raise RuntimeError(f"VapourSynth vspipe failed: {err_text[-500:] if err_text else 'Unknown error'}")
+            vspipe_err_bytes = b"".join(vspipe_stderr_chunks)
+            ffmpeg_err_text = "".join(ffmpeg_stderr_chunks)
+
+            if (ret_ffmpeg != 0 or (ret_vspipe not in (0, None)) or cur_segment_frame == 0) and not self._is_cancelled:
+                err_text = vspipe_err_bytes.decode("utf-8", errors="replace").strip()
+                if not err_text:
+                    err_text = ffmpeg_err_text.strip()
+                raise RuntimeError(
+                    f"VapourSynth vspipe/ffmpeg failed (vspipe code {ret_vspipe}, ffmpeg code {ret_ffmpeg}): "
+                    f"{err_text[-500:] if err_text else 'No output frames produced'}"
+                )
 
             return cur_segment_frame if cur_segment_frame > 0 else (num_frames if num_frames else int(round(seg.duration_sec * fps)))
 
@@ -392,6 +472,27 @@ class PipelineWorker(QThread):
             errors="replace"
         )
 
+        ffmpeg_stderr_chunks: list[str] = []
+
+        def _drain_text(stream, dest_list):
+            try:
+                for line in stream:
+                    dest_list.append(line)
+            except Exception:
+                pass
+            finally:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+
+        t_ffmpeg_err = threading.Thread(
+            target=_drain_text,
+            args=(self.ffmpeg_proc.stderr, ffmpeg_stderr_chunks),
+            daemon=True
+        )
+        t_ffmpeg_err.start()
+
         frame_pattern = re.compile(r"frame=(\d+)")
         fps_pattern = re.compile(r"fps=([\d\.]+)")
 
@@ -423,11 +524,12 @@ class PipelineWorker(QThread):
                     )
 
         ret = self.ffmpeg_proc.wait()
+        t_ffmpeg_err.join(timeout=1.0)
+        ffmpeg_err_text = "".join(ffmpeg_stderr_chunks)
+
         if ret != 0 and not self._is_cancelled:
-            stderr_out = ""
-            if self.ffmpeg_proc.stderr:
-                stderr_out = self.ffmpeg_proc.stderr.read()
-            raise RuntimeError(f"FFmpeg failed with exit code {ret}: {stderr_out[-500:] if stderr_out else 'Unknown error'}")
+            err_msg = ffmpeg_err_text.strip()
+            raise RuntimeError(f"FFmpeg failed with exit code {ret}: {err_msg[-500:] if err_msg else 'Unknown error'}")
 
         fallback_frames = int(round(seg.duration_sec * (self.media_info.fps or 30.0))) if seg.duration_sec > 0 else 0
         return cur_segment_frame if cur_segment_frame > 0 else fallback_frames
@@ -448,12 +550,12 @@ class PipelineWorker(QThread):
         """Safely terminate child subprocesses."""
         if self.ffmpeg_proc and self.ffmpeg_proc.poll() is None:
             try:
-                self.ffmpeg_proc.terminate()
+                self.ffmpeg_proc.kill()
             except Exception:
                 pass
         if self.vspipe_proc and self.vspipe_proc.poll() is None:
             try:
-                self.vspipe_proc.terminate()
+                self.vspipe_proc.kill()
             except Exception:
                 pass
 

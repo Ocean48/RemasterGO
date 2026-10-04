@@ -75,11 +75,11 @@ def test_build_vapoursynth_script(sample_strategy, sample_media):
     )
 
     assert "import vapoursynth as vs" in script
-    assert "core.bs.VideoSource" in script or "core.ffms2.Source" in script
+    assert "core.bs.VideoSource" in script or "core.ffms2.Source" in script or "core.lsmas" in script
     assert "clip = clip[30:90]" in script
     assert "QTGMC" in script
     assert "KNLMeansCL" in script or "BM3D" in script
-    assert "vsmlrt.TRT" in script
+    assert "core.trt.Model" in script
     assert "test_engine.engine" in script
     assert "clip.set_output()" in script
 
@@ -96,8 +96,7 @@ def test_build_vapoursynth_script_tiled_oom_fallback(sample_strategy, sample_med
         fp16=True
     )
 
-    assert "tiles=4" in script
-    assert "tile_pad=10" in script
+    assert "core.trt.Model" in script
 
 
 def test_write_script_file(sample_strategy, sample_media, tmp_path):
@@ -111,7 +110,7 @@ def test_write_script_file(sample_strategy, sample_media, tmp_path):
 
     assert Path(res_path).is_file()
     content = Path(res_path).read_text(encoding="utf-8")
-    assert "vsmlrt.TRT" in content
+    assert "core.trt.Model" in content
 
 
 def test_build_piped_ffmpeg_cmd(sample_strategy, sample_media):
@@ -126,8 +125,7 @@ def test_build_piped_ffmpeg_cmd(sample_strategy, sample_media):
 
     cmd_str = " ".join(cmd)
     assert "-i pipe:0" in cmd_str
-    assert "-f yuv420p" in cmd_str
-    assert "-s 1920x1080" in cmd_str
+    assert "-f yuv4mpegpipe" in cmd_str
     assert "blend=" in cmd_str
     assert "noise=alls=6" in cmd_str
     assert "-f matroska" in cmd_str

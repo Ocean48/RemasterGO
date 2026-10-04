@@ -193,20 +193,18 @@ class FiltergraphBuilder:
         if progress_pipe:
             cmd.extend(["-progress", "pipe:1", "-nostats"])
 
-        # Input 0: Raw YUV frame stream from VapourSynth stdout pipe
+        # Input 0: Raw Y4M frame stream from VapourSynth stdout pipe
         cmd.extend([
-            "-f", "yuv420p",
-            "-s", f"{tw}x{th}",
-            "-r", f"{effective_fps:.4f}",
+            "-f", "yuv4mpegpipe",
             "-i", "pipe:0"
         ])
 
         # Input 1: Original media for audio extraction & micro-texture blend
         if start_sec is not None and start_sec > 0:
             cmd.extend(["-ss", f"{start_sec:.4f}"])
-        cmd.extend(["-i", strategy.input_path])
         if duration_sec is not None and duration_sec > 0:
             cmd.extend(["-t", f"{duration_sec:.4f}"])
+        cmd.extend(["-i", strategy.input_path])
 
         # Filtergraph: Blend AI pipe stream with spline-scaled original for texture preservation
         ai_weight = max(0.0, min(1.0, strategy.blend_ai_ratio))
@@ -214,8 +212,9 @@ class FiltergraphBuilder:
         grain_strength = max(0, min(30, strategy.film_grain_intensity))
 
         filter_steps = [
-            f"[1:v]scale={tw}:{th}:flags=spline[scaled_orig]",
-            f"[0:v][scaled_orig]blend=all_expr='A*{ai_weight:.2f}+B*{orig_weight:.2f}'[blended]"
+            f"[0:v]setpts=PTS-STARTPTS[ai_pipe]",
+            f"[1:v]setpts=PTS-STARTPTS,fps={effective_fps:.4f},scale={tw}:{th}:flags=spline[scaled_orig]",
+            f"[ai_pipe][scaled_orig]blend=all_expr='A*{ai_weight:.2f}+B*{orig_weight:.2f}':shortest=1[blended]"
         ]
         if grain_strength > 0:
             filter_steps.append(f"[blended]noise=alls={grain_strength}:allf=t+u[final_video]")
@@ -229,7 +228,7 @@ class FiltergraphBuilder:
         # Audio handling from Input 1
         if media.has_audio:
             cmd.extend([
-                "-map", "1:a",
+                "-map", "1:a?",
                 "-af", "aresample=async=1000",
                 "-c:a", "aac",
                 "-b:a", "256k"
@@ -262,6 +261,7 @@ class FiltergraphBuilder:
             ])
 
         cmd.extend([
+            "-shortest",
             "-fps_mode", "passthrough",
             "-f", "matroska",
             target_out

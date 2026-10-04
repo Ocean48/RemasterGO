@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -282,6 +283,27 @@ def run_ai_segment_upscale(
             errors="replace"
         )
 
+        encode_stderr_chunks: list[str] = []
+
+        def _drain_text(stream, dest_list):
+            try:
+                for line in stream:
+                    dest_list.append(line)
+            except Exception:
+                pass
+            finally:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+
+        t_enc_err = threading.Thread(
+            target=_drain_text,
+            args=(encode_proc.stderr, encode_stderr_chunks),
+            daemon=True
+        )
+        t_enc_err.start()
+
         frame_pattern = re.compile(r"frame=(\d+)")
         fps_pattern = re.compile(r"fps=([\d\.]+)")
         cur_enc_frame = 0
@@ -290,7 +312,7 @@ def run_ai_segment_upscale(
         if encode_proc.stdout:
             for line in encode_proc.stdout:
                 if cancel_check and cancel_check():
-                    encode_proc.terminate()
+                    encode_proc.kill()
                     return 0
                 line = line.strip()
                 f_m = frame_pattern.search(line)
@@ -304,8 +326,11 @@ def run_ai_segment_upscale(
                         progress_cb(total_frames_in_seg, cur_enc_fps, f"Encoding Seg {seg.index + 1}")
 
         ret_enc = encode_proc.wait()
+        t_enc_err.join(timeout=1.0)
+        encode_err_text = "".join(encode_stderr_chunks)
+
         if ret_enc != 0 and not (cancel_check and cancel_check()):
-            err_msg = encode_proc.stderr.read() if encode_proc.stderr else "Unknown error"
+            err_msg = encode_err_text.strip()
             raise RuntimeError(f"FFmpeg encoding failed with exit code {ret_enc}: {err_msg[-500:] if err_msg else ''}")
 
         return total_frames_in_seg

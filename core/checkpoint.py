@@ -198,8 +198,9 @@ class CheckpointManager:
                 except Exception:
                     seg.status = "pending"
             else:
-                if seg.status == "completed":
-                    seg.status = "pending"
+                seg.status = "pending"
+                seg.rendered_frames = 0
+                seg.size_bytes = 0
 
     def get_pending_segments(self) -> List[SegmentInfo]:
         """Return all segments that still require processing."""

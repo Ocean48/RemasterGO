@@ -282,8 +282,8 @@ class MainWindow(QMainWindow):
         model_lbl.setFixedWidth(160)
         self.combo_model = QComboBox()
         self.combo_model.addItems([
-            "Real-ESRGAN_x4plus (General Real-World Video)",
             "realesr-general-x4v3 (TensorRT ONNX)",
+            "Real-ESRGAN_x4plus (General Real-World Video)",
             "RealESRGAN_x4plus_anime_6B (Anime & Animation)",
             "realesr-animevideov3 (Anime & Fast Video)",
             "RealESRGAN_x2plus (General Video 2x)",
@@ -561,7 +561,12 @@ class MainWindow(QMainWindow):
         from core.vapoursynth_builder import is_vspipe_available
         from core.ai_upscaler import is_ai_binary_available
 
-        if engine_info.exists and is_vspipe_available():
+        is_onnx_ready = (
+            engine_info.source_model_path is not None
+            and engine_info.source_model_path.lower().endswith(".onnx")
+            and self.cache_mgr.is_trtexec_available()
+        )
+        if (engine_info.exists or is_onnx_ready) and is_vspipe_available():
             return "TensorRT (GPU)"
         elif is_ai_binary_available():
             return "Real-ESRGAN Vulkan"
@@ -971,13 +976,6 @@ class MainWindow(QMainWindow):
                 target_dir = Path(self.custom_output_directory) if self.custom_output_directory else Path(fpath).parent
                 out_mkv = str(target_dir / f"{model_name}_{stem}_upscaled_{cur_th}p.mkv")
 
-                scene_cuts = []
-                if self.chk_scene_cuts.isChecked() and media.duration < 1800:
-                    self.log(f"Scanning {stem} for scene cut boundaries (threshold 0.3)...")
-                    scene_cuts = detect_scene_cuts(fpath, threshold=0.3)
-                    if scene_cuts:
-                        self.log(f"Detected {len(scene_cuts)} scene cuts in {stem}.")
-
                 strategy = StrategyConfig(
                     input_path=fpath,
                     output_path=out_mkv,
@@ -990,7 +988,7 @@ class MainWindow(QMainWindow):
                     film_grain_intensity=grain,
                     encoder=enc_name,
                     segment_duration_sec=seg_dur,
-                    scene_cuts=scene_cuts
+                    scene_cuts=[]
                 )
 
                 self.queue_controller.add_job(fpath, strategy, media)

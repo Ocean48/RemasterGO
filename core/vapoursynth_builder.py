@@ -59,6 +59,8 @@ class VapourSynthScriptBuilder:
         tff_flag = "True" if strategy.field_order in ("tff", "progressive") else "False"
         denoise_strength = strategy.denoise_strength
 
+        root_dir = Path(__file__).resolve().parent.parent.as_posix()
+
         lines: List[str] = [
             "# RemasterGO Auto-Generated VapourSynth Pipeline Graph",
             "# Stage 2: Deinterlacing & Denoising | Stage 3: Zero-Copy TensorRT Inference",
@@ -71,27 +73,28 @@ class VapourSynthScriptBuilder:
             "core = vs.core",
             "",
             "# Auto-load local plugins if present",
-            "workspace_dir = Path(__file__).resolve().parent.parent.parent",
+            f"workspace_dir = Path({repr(root_dir)})",
             "plugin_dirs = [",
             "    workspace_dir / 'bin' / 'vapoursynth' / 'plugins',",
+            "    workspace_dir / 'bin' / 'vapoursynth' / 'vs-plugins',",
             "    workspace_dir / 'bin' / 'vapoursynth' / 'vs-coreplugins',",
             "]",
             "for pdir in plugin_dirs:",
             "    if pdir.is_dir():",
             "        for dll in pdir.glob('*.dll'):",
             "            try:",
-            "                core.std.LoadPlugin(str(dll))",
+            "                core.std.LoadPlugin(str(dll.resolve()))",
             "            except Exception:",
             "                pass",
             "",
             "# Stage 1b: Video Source Decoder",
             "source_path = " + repr(input_file),
-            "if hasattr(core, 'bs'):",
-            "    clip = core.bs.VideoSource(source=source_path)",
+            "if hasattr(core, 'lsmas'):",
+            "    clip = core.lsmas.LWLibavSource(source=source_path)",
             "elif hasattr(core, 'ffms2'):",
             "    clip = core.ffms2.Source(source=source_path)",
-            "elif hasattr(core, 'lsmas'):",
-            "    clip = core.lsmas.LWLibavSource(source=source_path)",
+            "elif hasattr(core, 'bs'):",
+            "    clip = core.bs.VideoSource(source=source_path)",
             "else:",
             "    raise RuntimeError('No compatible VapourSynth source plugin found (bs, ffms2, or lsmas)')",
             ""
@@ -140,17 +143,19 @@ class VapourSynthScriptBuilder:
                 f"    clip = core.bm3d.BM3D(clip, sigma=[{denoise_strength:.2f}, {denoise_strength:.2f}, {denoise_strength:.2f}])",
             ])
 
-        # Stage 3: Zero-Copy TensorRT Super-Resolution (vs-mlrt)
-        tile_pad = 10 if tiles > 1 else 0
+        # Stage 3: Zero-Copy TensorRT Super-Resolution (vs-mlrt / core.trt)
+        tw = strategy.target_width
+        th = strategy.target_height
         lines.extend([
             "",
-            "# Stage 3: Direct VRAM TensorRT Inference via vs-mlrt",
-            "import vsmlrt",
+            "# Stage 3: Direct VRAM TensorRT Inference via core.trt.Model",
+            "# Convert YUV to RGB planar Float32 required by neural network",
+            "clip = core.resize.Bicubic(clip, format=vs.RGBS, matrix_in_s='709')",
             f"model_engine = {repr(engine_file)}",
-            f"clip = vsmlrt.TRT(clip, model_path=model_engine, tiles={tiles}, tile_pad={tile_pad}, fp16={fp16})",
+            "clip = core.trt.Model(clip, model_engine, device_id=0)",
             "",
-            "# Output standard progressive YUV420P stream",
-            "clip = core.resize.Bicubic(clip, format=vs.YUV420P8)",
+            "# Scale to exact target resolution and convert back to YUV420P8",
+            f"clip = core.resize.Bicubic(clip, width={tw}, height={th}, format=vs.YUV420P8, matrix_s='709')",
             "clip.set_output()",
             ""
         ])

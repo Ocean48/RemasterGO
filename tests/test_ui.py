@@ -36,7 +36,7 @@ def test_main_window_instantiation():
     assert window.card_engine is not None
     assert window.bar_current is not None
     assert window.bar_queue is not None
-    assert "Real-ESRGAN" in window.lbl_selected_model.text() or "SPAN" in window.lbl_selected_model.text()
+    assert "Real-ESRGAN" in window.lbl_selected_model.text() or "realesr" in window.lbl_selected_model.text() or "SPAN" in window.lbl_selected_model.text()
     assert window.combo_resolution.count() > 0
     assert window.combo_encoder.count() > 0
 
