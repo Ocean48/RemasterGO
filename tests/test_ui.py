@@ -132,6 +132,51 @@ def test_cli_helper_commands(capsys):
     assert code_engines == 0
 
 
+def test_restoration_settings_tooltips():
+    app = QApplication.instance() or QApplication(sys.argv)
+    window = MainWindow()
+
+    # Verify tooltips are present on controls and explain increase/decrease effects
+    assert "Target Resolution" in window.combo_resolution.toolTip()
+    assert "Increase / Higher" in window.combo_resolution.toolTip()
+    assert "Decrease / Lower" in window.combo_resolution.toolTip()
+
+    assert "AI Model Engine" in window.combo_model.toolTip()
+    assert "Higher / Specialized Models" in window.combo_model.toolTip()
+    assert "Lower / Fast Models" in window.combo_model.toolTip()
+
+    assert "Motion-Adaptive Deinterlacing" in window.chk_deinterlace.toolTip()
+    assert "Enabled" in window.chk_deinterlace.toolTip()
+    assert "Disabled" in window.chk_deinterlace.toolTip()
+
+    assert "Analog Tape Denoise" in window.chk_denoise.toolTip()
+    assert "Enabled" in window.chk_denoise.toolTip()
+    assert "Disabled" in window.chk_denoise.toolTip()
+
+    assert "Detect Scene Cut Boundaries" in window.chk_scene_cuts.toolTip()
+    assert "Enabled" in window.chk_scene_cuts.toolTip()
+    assert "Disabled" in window.chk_scene_cuts.toolTip()
+
+    assert "Micro-Texture Blend Ratio" in window.slider_blend.toolTip()
+    assert "Increase" in window.slider_blend.toolTip()
+    assert "Decrease" in window.slider_blend.toolTip()
+
+    assert "Dynamic Film Grain Intensity" in window.slider_grain.toolTip()
+    assert "Increase" in window.slider_grain.toolTip()
+    assert "Decrease" in window.slider_grain.toolTip()
+
+    assert "Video Compression Encoder" in window.combo_encoder.toolTip()
+    assert "Hardware NVENC" in window.combo_encoder.toolTip()
+    assert "Software CPU" in window.combo_encoder.toolTip()
+
+    assert "Segment Checkpoint Duration" in window.combo_segments.toolTip()
+    assert "Increase" in window.combo_segments.toolTip()
+    assert "Decrease" in window.combo_segments.toolTip()
+
+    assert "Output Destination Directory" in window.lbl_out_dir.toolTip()
+
+
+
 
 
 

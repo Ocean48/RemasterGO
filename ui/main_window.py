@@ -262,10 +262,37 @@ class MainWindow(QMainWindow):
         res_layout = QVBoxLayout(grp_res)
         res_layout.setSpacing(12)
 
+        tip_res = (
+            "<div style='font-size: 12px; line-height: 1.4;'>"
+            "<p style='font-size: 13px; font-weight: bold; color: #38bdf8; margin: 0 0 4px 0;'>Target Resolution</p>"
+            "<p style='color: #e2e8f0; margin: 0 0 6px 0;'>Sets the output video resolution and dimensions for AI upscaling.</p>"
+            "<p style='color: #86efac; margin: 0 0 4px 0;'><b>Increase / Higher (e.g. 4K UHD, 1440p, 4x):</b><br>"
+            "• Yields maximum sharpness, ultra-fine textures, and clarity on large screens.<br>"
+            "• Increases processing time, GPU VRAM requirements, and output file size.</p>"
+            "<p style='color: #fca5a5; margin: 0;'><b>Decrease / Lower (e.g. 1080p FHD, 2x):</b><br>"
+            "• Renders significantly faster with low GPU memory demand.<br>"
+            "• Produces compact video file sizes with standard definition detail.</p>"
+            "</div>"
+        )
+        tip_model = (
+            "<div style='font-size: 12px; line-height: 1.4;'>"
+            "<p style='font-size: 13px; font-weight: bold; color: #38bdf8; margin: 0 0 4px 0;'>AI Model Engine</p>"
+            "<p style='color: #e2e8f0; margin: 0 0 6px 0;'>Selects the neural network model used for super-resolution and artifact removal.</p>"
+            "<p style='color: #86efac; margin: 0 0 4px 0;'><b>Higher / Specialized Models (e.g. Real-ESRGAN_x4plus, Anime_6B):</b><br>"
+            "• Delivers higher quality restoration, crisp line art, and deep texture reconstruction.<br>"
+            "• Requires more GPU compute power and longer processing time per frame.</p>"
+            "<p style='color: #fca5a5; margin: 0;'><b>Lower / Fast Models (e.g. realesr-general-x4v3, RealESRGAN_x2plus, SPAN):</b><br>"
+            "• High-throughput processing with lower compute and VRAM requirements.<br>"
+            "• Provides moderate enhancement suited for fast turnaround or cleaner source files.</p>"
+            "</div>"
+        )
+
         res_row = QHBoxLayout()
         res_lbl = QLabel("Target Resolution:")
         res_lbl.setFixedWidth(160)
+        res_lbl.setToolTip(tip_res)
         self.combo_resolution = QComboBox()
+        self.combo_resolution.setToolTip(tip_res)
         self.combo_resolution.addItems([
             "1920x1080 (1080p FHD)",
             "2560x1440 (1440p QHD)",
@@ -280,7 +307,9 @@ class MainWindow(QMainWindow):
         model_row = QHBoxLayout()
         model_lbl = QLabel("AI Model Engine:")
         model_lbl.setFixedWidth(160)
+        model_lbl.setToolTip(tip_model)
         self.combo_model = QComboBox()
+        self.combo_model.setToolTip(tip_model)
         self.combo_model.addItems([
             "realesr-general-x4v3 (TensorRT ONNX)",
             "Real-ESRGAN_x4plus (General Real-World Video)",
@@ -300,16 +329,53 @@ class MainWindow(QMainWindow):
         clean_layout = QVBoxLayout(grp_cleaning)
         clean_layout.setSpacing(10)
 
+        tip_deinterlace = (
+            "<div style='font-size: 12px; line-height: 1.4;'>"
+            "<p style='font-size: 13px; font-weight: bold; color: #38bdf8; margin: 0 0 4px 0;'>Motion-Adaptive Deinterlacing</p>"
+            "<p style='color: #e2e8f0; margin: 0 0 6px 0;'>Reconstructs interlaced video fields (e.g. 480i/1080i broadcast, VHS, DVD) into progressive frames using QTGMC / bwdif filters.</p>"
+            "<p style='color: #86efac; margin: 0 0 4px 0;'><b>Enabled (Checked):</b><br>"
+            "• Eliminates horizontal combing artifacts and jagged edges on moving objects.<br>"
+            "• Prevents the AI model from amplifying interlacing artifacts into distorted patterns.</p>"
+            "<p style='color: #fca5a5; margin: 0;'><b>Disabled (Unchecked):</b><br>"
+            "• Bypasses deinterlacing; recommended only for true progressive footage (e.g. 720p/1080p web or film).</p>"
+            "</div>"
+        )
+        tip_denoise = (
+            "<div style='font-size: 12px; line-height: 1.4;'>"
+            "<p style='font-size: 13px; font-weight: bold; color: #38bdf8; margin: 0 0 4px 0;'>Analog Tape Denoise</p>"
+            "<p style='color: #e2e8f0; margin: 0 0 6px 0;'>Applies multi-frame spatial-temporal noise filtration (KNLMeansCL / hqdn3d) before AI inference.</p>"
+            "<p style='color: #86efac; margin: 0 0 4px 0;'><b>Enabled (Checked):</b><br>"
+            "• Removes analog tape hiss, chroma noise, and sensor grain before upscaling.<br>"
+            "• Helps the AI neural network focus on enhancing true subject details rather than noise.</p>"
+            "<p style='color: #fca5a5; margin: 0;'><b>Disabled (Unchecked):</b><br>"
+            "• Retains original source grain; may cause the AI upscaler to accentuate background noise into blotchy textures.</p>"
+            "</div>"
+        )
+        tip_scene_cuts = (
+            "<div style='font-size: 12px; line-height: 1.4;'>"
+            "<p style='font-size: 13px; font-weight: bold; color: #38bdf8; margin: 0 0 4px 0;'>Detect Scene Cut Boundaries</p>"
+            "<p style='color: #e2e8f0; margin: 0 0 6px 0;'>Analyzes frame luminance and color histograms to detect camera shot changes.</p>"
+            "<p style='color: #86efac; margin: 0 0 4px 0;'><b>Enabled (Checked):</b><br>"
+            "• Snaps checkpoint segments cleanly to shot boundaries to prevent frame tearing and ghosting.<br>"
+            "• Keeps temporal AI filters synchronized with shot changes for seamless transitions.</p>"
+            "<p style='color: #fca5a5; margin: 0;'><b>Disabled (Unchecked):</b><br>"
+            "• Splits segments strictly based on elapsed time, which may slice across active scenes.</p>"
+            "</div>"
+        )
+
         self.chk_deinterlace = QCheckBox("Motion-Adaptive Deinterlace (QTGMC / bwdif auto-detect)")
         self.chk_deinterlace.setChecked(True)
+        self.chk_deinterlace.setToolTip(tip_deinterlace)
         clean_layout.addWidget(self.chk_deinterlace)
 
         self.chk_denoise = QCheckBox("Analog Tape Denoise (KNLMeansCL / hqdn3d spatial-temporal)")
         self.chk_denoise.setChecked(True)
+        self.chk_denoise.setToolTip(tip_denoise)
         clean_layout.addWidget(self.chk_denoise)
 
         self.chk_scene_cuts = QCheckBox("Detect Scene Cut Boundaries (Align Checkpoint Segments & Prevent Tearing)")
         self.chk_scene_cuts.setChecked(True)
+        self.chk_scene_cuts.setToolTip(tip_scene_cuts)
         clean_layout.addWidget(self.chk_scene_cuts)
 
         layout.addWidget(grp_cleaning)
@@ -319,9 +385,36 @@ class MainWindow(QMainWindow):
         tune_layout = QVBoxLayout(grp_tuning)
         tune_layout.setSpacing(12)
 
+        tip_blend = (
+            "<div style='font-size: 12px; line-height: 1.4;'>"
+            "<p style='font-size: 13px; font-weight: bold; color: #38bdf8; margin: 0 0 4px 0;'>Micro-Texture Blend Ratio</p>"
+            "<p style='color: #e2e8f0; margin: 0 0 6px 0;'>Controls the blending ratio between AI-upscaled detail and the original source image texture.</p>"
+            "<p style='color: #86efac; margin: 0 0 4px 0;'><b>Increase (Towards 100% AI):</b><br>"
+            "• Maximizes edge sharpness, clarity, and neural reconstruction.<br>"
+            "• Higher values may appear overly smooth or slightly synthetic if source lacks organic texture.</p>"
+            "<p style='color: #fca5a5; margin: 0;'><b>Decrease (Towards 0% Original):</b><br>"
+            "• Retains organic film grain, authentic optical softness, and original camera texture.<br>"
+            "• Reduces AI super-resolution sharpness and detail enhancement.</p>"
+            "</div>"
+        )
+        tip_grain = (
+            "<div style='font-size: 12px; line-height: 1.4;'>"
+            "<p style='font-size: 13px; font-weight: bold; color: #38bdf8; margin: 0 0 4px 0;'>Dynamic Film Grain Intensity</p>"
+            "<p style='color: #e2e8f0; margin: 0 0 6px 0;'>Injects organic, frequency-matched procedural film grain over the rendered output.</p>"
+            "<p style='color: #86efac; margin: 0 0 4px 0;'><b>Increase (Higher Value, e.g. 10 - 20):</b><br>"
+            "• Adds a richer cinematic texture.<br>"
+            "• Effectively masks AI plastic smoothness, color banding, and compression blocks in flat areas (e.g., skies/shadows).</p>"
+            "<p style='color: #fca5a5; margin: 0;'><b>Decrease (Lower Value / 0 - Off):</b><br>"
+            "• Yields a cleaner, noise-free image with smooth gradients.<br>"
+            "• Low/zero values on heavy AI upscales may look unnaturally clean or sterile.</p>"
+            "</div>"
+        )
+
         blend_box = QVBoxLayout()
         self.lbl_blend = QLabel("Micro-Texture Blend: 80% AI / 20% Original")
+        self.lbl_blend.setToolTip(tip_blend)
         self.slider_blend = QSlider(Qt.Orientation.Horizontal)
+        self.slider_blend.setToolTip(tip_blend)
         self.slider_blend.setRange(0, 100)
         self.slider_blend.setValue(80)
         self.slider_blend.valueChanged.connect(self._on_blend_changed)
@@ -331,7 +424,9 @@ class MainWindow(QMainWindow):
 
         grain_box = QVBoxLayout()
         self.lbl_grain = QLabel("Dynamic Film Grain: 6 (Subtle)")
+        self.lbl_grain.setToolTip(tip_grain)
         self.slider_grain = QSlider(Qt.Orientation.Horizontal)
+        self.slider_grain.setToolTip(tip_grain)
         self.slider_grain.setRange(0, 20)
         self.slider_grain.setValue(6)
         self.slider_grain.valueChanged.connect(self._on_grain_changed)
@@ -346,10 +441,46 @@ class MainWindow(QMainWindow):
         out_layout = QVBoxLayout(grp_out)
         out_layout.setSpacing(12)
 
+        tip_encoder = (
+            "<div style='font-size: 12px; line-height: 1.4;'>"
+            "<p style='font-size: 13px; font-weight: bold; color: #38bdf8; margin: 0 0 4px 0;'>Video Compression Encoder</p>"
+            "<p style='color: #e2e8f0; margin: 0 0 6px 0;'>Selects the video codec and hardware accelerator used to render the final output MKV container.</p>"
+            "<p style='color: #86efac; margin: 0 0 4px 0;'><b>Hardware NVENC (hevc_nvenc / h264_nvenc):</b><br>"
+            "• Blazing fast GPU-accelerated encoding using dedicated NVIDIA silicon.<br>"
+            "• Negligible CPU utilization, allowing maximum performance for AI processing.</p>"
+            "<p style='color: #fca5a5; margin: 0;'><b>Software CPU (libx265 / libx264):</b><br>"
+            "• Slower encoding speed with heavy CPU utilization.<br>"
+            "• Yields marginally higher compression efficiency at equivalent bitrates.</p>"
+            "</div>"
+        )
+        tip_segments = (
+            "<div style='font-size: 12px; line-height: 1.4;'>"
+            "<p style='font-size: 13px; font-weight: bold; color: #38bdf8; margin: 0 0 4px 0;'>Segment Checkpoint Duration</p>"
+            "<p style='color: #e2e8f0; margin: 0 0 6px 0;'>Sets the segment duration for chunked video processing. Chunks are rendered independently and concatenated losslessly.</p>"
+            "<p style='color: #86efac; margin: 0 0 4px 0;'><b>Increase (e.g. 10 Minutes / Disabled):</b><br>"
+            "• Produces fewer segment files and slightly reduces disk I/O on long, uninterrupted batches.</p>"
+            "<p style='color: #fca5a5; margin: 0;'><b>Decrease (e.g. 1 Minute / 5 Minutes):</b><br>"
+            "• Creates frequent resume checkpoints, ensuring safety against unexpected interruptions or crashes.<br>"
+            "• Keeps intermediate storage chunks smaller.</p>"
+            "</div>"
+        )
+        tip_dest = (
+            "<div style='font-size: 12px; line-height: 1.4;'>"
+            "<p style='font-size: 13px; font-weight: bold; color: #38bdf8; margin: 0 0 4px 0;'>Output Destination Directory</p>"
+            "<p style='color: #e2e8f0; margin: 0 0 6px 0;'>Specifies the directory where final processed MKV video files are saved.</p>"
+            "<p style='color: #86efac; margin: 0 0 4px 0;'><b>Custom Directory (Browse):</b><br>"
+            "• Consolidates all upscaled videos into a dedicated output folder of your choice.</p>"
+            "<p style='color: #fca5a5; margin: 0;'><b>Default Location (Reset):</b><br>"
+            "• Automatically exports each upscaled video to the same folder as its original source file.</p>"
+            "</div>"
+        )
+
         enc_row = QHBoxLayout()
         enc_lbl = QLabel("Video Encoder:")
         enc_lbl.setFixedWidth(160)
+        enc_lbl.setToolTip(tip_encoder)
         self.combo_encoder = QComboBox()
+        self.combo_encoder.setToolTip(tip_encoder)
         self.combo_encoder.addItems([
             "hevc_nvenc (NVIDIA HEVC High Quality)",
             "h264_nvenc (NVIDIA H.264 Fast)",
@@ -363,7 +494,9 @@ class MainWindow(QMainWindow):
         seg_row = QHBoxLayout()
         seg_lbl = QLabel("Segment Checkpoint Duration:")
         seg_lbl.setFixedWidth(160)
+        seg_lbl.setToolTip(tip_segments)
         self.combo_segments = QComboBox()
+        self.combo_segments.setToolTip(tip_segments)
         self.combo_segments.addItems([
             "5 Minutes (Recommended Checkpoint)",
             "10 Minutes",
@@ -376,12 +509,16 @@ class MainWindow(QMainWindow):
 
         dest_box = QVBoxLayout()
         dest_lbl = QLabel("Output Destination (Strictly Enforced .mkv):")
+        dest_lbl.setToolTip(tip_dest)
         dest_btn_row = QHBoxLayout()
         self.lbl_out_dir = QLabel("Same as input video location (Default)")
         self.lbl_out_dir.setStyleSheet("color: #38bdf8; font-size: 11px;")
+        self.lbl_out_dir.setToolTip(tip_dest)
         btn_browse_out = QPushButton("Browse...")
+        btn_browse_out.setToolTip(tip_dest)
         btn_browse_out.clicked.connect(self._browse_output_dir)
         btn_reset_out = QPushButton("Reset")
+        btn_reset_out.setToolTip(tip_dest)
         btn_reset_out.clicked.connect(self._reset_output_dir)
 
         dest_btn_row.addWidget(self.lbl_out_dir, 1)
@@ -1184,5 +1321,4 @@ class MainWindow(QMainWindow):
         self.bar_current.setValue(100)
         self.bar_current.setFormat("100.0% (Queue Completed)")
         self._update_queue_progress()
-        QMessageBox.information(self, "Processing Finished", "All queued video upscaling jobs have completed!")
         QMessageBox.information(self, "Processing Finished", "All queued video upscaling jobs have completed!")

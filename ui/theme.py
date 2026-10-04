@@ -317,4 +317,15 @@ QTabBar::tab:hover:!selected {
     color: #f1f5f9;
 }
 
+/* Tooltips */
+QToolTip {
+    background-color: #181824;
+    color: #f1f5f9;
+    border: 1px solid #38bdf8;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+}
+
+
 """
