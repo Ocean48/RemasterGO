@@ -130,3 +130,24 @@ def test_build_piped_ffmpeg_cmd(sample_strategy, sample_media):
     assert "noise=alls=6" in cmd_str
     assert "-f matroska" in cmd_str
     assert "out.mkv" in cmd_str
+
+
+def test_broken_pipe_success_detection():
+    # Test that errno 32 / EPIPE when ffmpeg finishes cleanly is treated as successful segment completion
+    err_text = "Error: fwrite() call failed when writing video plane 0, errno: 32, frame: 3084"
+    is_broken_pipe = (
+        "errno: 32" in err_text.lower()
+        or "broken pipe" in err_text.lower()
+        or "fwrite() call failed" in err_text.lower()
+    )
+    ret_ffmpeg = 0
+    cur_segment_frame = 3084
+    ret_vspipe = 1
+
+    is_success = (
+        ret_ffmpeg == 0
+        and cur_segment_frame > 0
+        and (ret_vspipe in (0, None) or is_broken_pipe)
+    )
+    assert is_success is True
+

@@ -425,10 +425,25 @@ class PipelineWorker(QThread):
             vspipe_err_bytes = b"".join(vspipe_stderr_chunks)
             ffmpeg_err_text = "".join(ffmpeg_stderr_chunks)
 
-            if (ret_ffmpeg != 0 or (ret_vspipe not in (0, None)) or cur_segment_frame == 0) and not self._is_cancelled:
-                err_text = vspipe_err_bytes.decode("utf-8", errors="replace").strip()
-                if not err_text:
-                    err_text = ffmpeg_err_text.strip()
+            err_text = vspipe_err_bytes.decode("utf-8", errors="replace").strip()
+            if not err_text:
+                err_text = ffmpeg_err_text.strip()
+
+            # Check if vspipe exit code was caused by a benign broken pipe (errno 32 / EPIPE)
+            # when FFmpeg finished all required frames and closed stdin pipe cleanly.
+            is_broken_pipe = (
+                "errno: 32" in err_text.lower()
+                or "broken pipe" in err_text.lower()
+                or "fwrite() call failed" in err_text.lower()
+            )
+
+            is_success = (
+                ret_ffmpeg == 0
+                and cur_segment_frame > 0
+                and (ret_vspipe in (0, None) or is_broken_pipe)
+            )
+
+            if not is_success and not self._is_cancelled:
                 raise RuntimeError(
                     f"VapourSynth vspipe/ffmpeg failed (vspipe code {ret_vspipe}, ffmpeg code {ret_ffmpeg}): "
                     f"{err_text[-500:] if err_text else 'No output frames produced'}"
