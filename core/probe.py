@@ -98,6 +98,10 @@ class VideoStreamInfo:
     field_order: str = "progressive"
     is_interlaced: bool = False
     bit_rate: Optional[int] = None
+    rotation: int = 0
+    display_width: int = 0
+    display_height: int = 0
+    is_portrait: bool = False
 
 
 @dataclass
@@ -132,6 +136,30 @@ class MediaMetadata:
     @property
     def height(self) -> int:
         return self.video.height if self.video else 0
+
+    @property
+    def display_width(self) -> int:
+        if self.video and self.video.display_width > 0:
+            return self.video.display_width
+        return self.width
+
+    @property
+    def display_height(self) -> int:
+        if self.video and self.video.display_height > 0:
+            return self.video.display_height
+        return self.height
+
+    @property
+    def rotation(self) -> int:
+        if self.video:
+            return self.video.rotation
+        return 0
+
+    @property
+    def is_portrait(self) -> bool:
+        if self.video:
+            return self.video.is_portrait
+        return False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -244,11 +272,43 @@ def probe_media(filepath: str) -> MediaMetadata:
             bit_rate = int(s.get("bit_rate")) if s.get("bit_rate", "").isdigit() else None
             stream_dur = float(s.get("duration", total_duration))
 
+            # Parse rotation from tags or side_data_list (e.g. smartphone recordings)
+            rotation_deg = 0
+            tags = s.get("tags", {})
+            if "rotate" in tags:
+                try:
+                    rotation_deg = int(round(float(tags["rotate"])))
+                except (ValueError, TypeError):
+                    rotation_deg = 0
+            else:
+                side_data_list = s.get("side_data_list", [])
+                for sd in side_data_list:
+                    if "rotation" in sd:
+                        try:
+                            # In ffprobe side_data Display Matrix, rotation is CCW (e.g. -90 for 90 CW)
+                            rotation_deg = int(round(-float(sd["rotation"])))
+                            break
+                        except (ValueError, TypeError):
+                            pass
+
+            norm_rotation = (rotation_deg % 360 + 360) % 360
+
+            raw_w = int(s.get("width", 0))
+            raw_h = int(s.get("height", 0))
+            if norm_rotation in (90, 270):
+                disp_w = raw_h
+                disp_h = raw_w
+            else:
+                disp_w = raw_w
+                disp_h = raw_h
+
+            is_portrait = disp_h > disp_w
+
             video_info = VideoStreamInfo(
                 index=int(s.get("index", 0)),
                 codec_name=s.get("codec_name", "unknown"),
-                width=int(s.get("width", 0)),
-                height=int(s.get("height", 0)),
+                width=raw_w,
+                height=raw_h,
                 pix_fmt=s.get("pix_fmt", "yuv420p"),
                 r_frame_rate=r_rate,
                 fps=fps,
@@ -258,7 +318,11 @@ def probe_media(filepath: str) -> MediaMetadata:
                 dar=s.get("display_aspect_ratio", "16:9"),
                 field_order=field_order,
                 is_interlaced=is_interlaced,
-                bit_rate=bit_rate
+                bit_rate=bit_rate,
+                rotation=norm_rotation,
+                display_width=disp_w,
+                display_height=disp_h,
+                is_portrait=is_portrait
             )
         elif codec_type == "audio":
             sample_rate = int(s.get("sample_rate", 44100))
@@ -339,6 +403,7 @@ def create_strategy(
     output_dir: Optional[str] = None,
     target_width: int = 1920,
     target_height: int = 1080,
+    scale_factor: Optional[float] = None,
     model_name: str = "Real-ESRGAN_x4",
     encoder: str = "hevc_nvenc",
     blend_ai_ratio: float = 0.8,
@@ -349,7 +414,25 @@ def create_strategy(
     """Generate StrategyConfig based on probed media metadata and target preferences."""
     input_stem = Path(media.filepath).stem
     out_dir = Path(output_dir) if output_dir else Path(media.filepath).parent
-    out_mkv = str(out_dir / f"{input_stem}_upscaled_{target_height}p.mkv")
+
+    if scale_factor is not None and scale_factor > 0:
+        final_tw = int(round(media.display_width * scale_factor))
+        final_th = int(round(media.display_height * scale_factor))
+    else:
+        # Auto-orient target dimensions if source is portrait
+        final_tw = target_width
+        final_th = target_height
+        if media.is_portrait and target_width > target_height:
+            final_tw, final_th = target_height, target_width
+
+    # Ensure even dimensions for codec compatibility
+    final_tw = final_tw + (final_tw % 2)
+    final_th = final_th + (final_th % 2)
+
+    if scale_factor is not None and scale_factor > 0:
+        out_mkv = str(out_dir / f"{input_stem}_upscaled_{int(scale_factor)}x_{final_th}p.mkv")
+    else:
+        out_mkv = str(out_dir / f"{input_stem}_upscaled_{final_th}p.mkv")
 
     deinterlace = False
     field_order = "progressive"
@@ -364,8 +447,8 @@ def create_strategy(
     return StrategyConfig(
         input_path=media.filepath,
         output_path=out_mkv,
-        target_width=target_width,
-        target_height=target_height,
+        target_width=final_tw,
+        target_height=final_th,
         model_name=model_name,
         deinterlace=deinterlace,
         field_order=field_order,

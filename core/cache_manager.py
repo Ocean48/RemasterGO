@@ -53,6 +53,23 @@ class EngineCacheManager:
                     return str(p)
         return None
 
+    def find_onnx_model_source(self, model_name: Optional[str] = None) -> Optional[str]:
+        """Look for a compilable ONNX model file (.onnx) matching model_name or fallback to any installed ONNX model."""
+        if model_name:
+            clean_name = model_name.lower().replace("-", "").replace("_", "").replace(" ", "")
+            for p in self.models_dir.glob("*.onnx"):
+                if p.is_file():
+                    stem_clean = p.stem.lower().replace("-", "").replace("_", "").replace(" ", "")
+                    if clean_name in stem_clean or stem_clean in clean_name:
+                        return str(p)
+
+        # Fallback to any available ONNX model in cache/models/
+        onnx_candidates = list(self.models_dir.glob("*.onnx"))
+        if onnx_candidates:
+            return str(onnx_candidates[0])
+
+        return None
+
     def _detect_gpu_name(self) -> str:
         """Query GPU name via nvidia-smi with fallback to generic identifier."""
         try:

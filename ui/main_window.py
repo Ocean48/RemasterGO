@@ -294,11 +294,13 @@ class MainWindow(QMainWindow):
         self.combo_resolution = QComboBox()
         self.combo_resolution.setToolTip(tip_res)
         self.combo_resolution.addItems([
+            "2x Native Scale (Aspect Ratio Preserved)",
+            "4x Native Scale (Aspect Ratio Preserved)",
+            "1x Native Restoration (Original Size)",
+            "3x Native Scale (Aspect Ratio Preserved)",
             "1920x1080 (1080p FHD)",
             "2560x1440 (1440p QHD)",
-            "3840x2160 (4K UHD)",
-            "2x Native Upscale",
-            "4x Native Upscale"
+            "3840x2160 (4K UHD)"
         ])
         res_row.addWidget(res_lbl)
         res_row.addWidget(self.combo_resolution, 1)
@@ -1100,14 +1102,29 @@ class MainWindow(QMainWindow):
         for fpath in filepaths:
             try:
                 media = probe_media(fpath)
-                in_res = f"{media.width}x{media.height}"
+                in_res = f"{media.display_width}x{media.display_height}"
 
-                if "Native" in self.combo_resolution.currentText():
-                    scale_mult = 2 if "2x" in self.combo_resolution.currentText() else 4
-                    cur_tw = media.width * scale_mult
-                    cur_th = media.height * scale_mult
+                res_txt = self.combo_resolution.currentText()
+                if "Native" in res_txt or "Scale" in res_txt:
+                    if "1x" in res_txt:
+                        scale_mult = 1
+                    elif "3x" in res_txt:
+                        scale_mult = 3
+                    elif "4x" in res_txt:
+                        scale_mult = 4
+                    else:
+                        scale_mult = 2
+                    cur_tw = media.display_width * scale_mult
+                    cur_th = media.display_height * scale_mult
                 else:
                     cur_tw, cur_th = tw, th
+                    # Automatically adapt target resolution orientation for vertical/portrait videos
+                    if media.is_portrait and cur_tw > cur_th:
+                        cur_tw, cur_th = cur_th, cur_tw
+
+                # Ensure dimensions are even for video codec compatibility
+                cur_tw = cur_tw + (cur_tw % 2)
+                cur_th = cur_th + (cur_th % 2)
 
                 stem = Path(fpath).stem
                 target_dir = Path(self.custom_output_directory) if self.custom_output_directory else Path(fpath).parent

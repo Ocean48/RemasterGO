@@ -124,6 +124,10 @@ def test_find_model_source_in_cache_models():
         assert info.exists is False
         assert info.source_model_path == str(model_file)
 
+        # Test find_onnx_model_source matching and fallback
+        assert mgr.find_onnx_model_source("SPAN_4x") == str(model_file)
+        assert mgr.find_onnx_model_source("Unknown_Model") == str(model_file)
+
 
 def test_compile_engine_validates_onnx_extension():
     import pytest

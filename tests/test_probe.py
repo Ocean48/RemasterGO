@@ -84,3 +84,47 @@ def test_create_strategy_default_input_location():
     assert strategy.output_path.endswith(".mkv")
     assert strategy.target_height == 1080
     assert strategy.encoder == "hevc_nvenc"
+
+
+def test_portrait_rotation_and_display_dimensions():
+    from core.probe import VideoStreamInfo
+    vinfo = VideoStreamInfo(
+        index=0,
+        codec_name="h264",
+        width=1920,
+        height=1080,
+        pix_fmt="yuv420p",
+        r_frame_rate="30/1",
+        fps=30.0,
+        nb_frames=300,
+        duration=10.0,
+        rotation=90,
+        display_width=1080,
+        display_height=1920,
+        is_portrait=True
+    )
+    meta = MediaMetadata(
+        filepath="phone_video.mp4",
+        format_name="mov,mp4",
+        duration=10.0,
+        size_bytes=5000000,
+        video=vinfo,
+        audio=[]
+    )
+    assert meta.rotation == 90
+    assert meta.display_width == 1080
+    assert meta.display_height == 1920
+    assert meta.is_portrait is True
+
+    # When strategy is created with default 1920x1080, it should auto-adapt to 1080x1920
+    strategy = create_strategy(meta, target_width=1920, target_height=1080)
+    assert strategy.target_width == 1080
+    assert strategy.target_height == 1920
+    assert "upscaled_1920p.mkv" in strategy.output_path
+
+    # When strategy is created with explicit scale_factor=2, it should produce 2160x3840
+    strat_scaled = create_strategy(meta, scale_factor=2.0)
+    assert strat_scaled.target_width == 2160
+    assert strat_scaled.target_height == 3840
+    assert "upscaled_2x_3840p.mkv" in strat_scaled.output_path
+

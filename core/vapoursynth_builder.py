@@ -100,6 +100,30 @@ class VapourSynthScriptBuilder:
             ""
         ]
 
+        # Stage 1c: Orientation Normalization (Transpose/Flip for rotated camera recordings)
+        rot = media.rotation
+        if rot == 90:
+            lines.extend([
+                "# Stage 1c: Normalize 90-degree clockwise rotation",
+                "clip = core.std.Transpose(clip)",
+                "clip = core.std.FlipHorizontal(clip)",
+                ""
+            ])
+        elif rot == 180:
+            lines.extend([
+                "# Stage 1c: Normalize 180-degree rotation",
+                "clip = core.std.FlipHorizontal(clip)",
+                "clip = core.std.FlipVertical(clip)",
+                ""
+            ])
+        elif rot == 270:
+            lines.extend([
+                "# Stage 1c: Normalize 270-degree clockwise rotation",
+                "clip = core.std.Transpose(clip)",
+                "clip = core.std.FlipVertical(clip)",
+                ""
+            ])
+
         # Segment slicing at the clip level
         if start_frame is not None and start_frame > 0:
             if num_frames is not None and num_frames > 0:

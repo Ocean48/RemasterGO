@@ -79,14 +79,36 @@ class PipelineWorker(QThread):
                 self.sig_log.emit(f"Detected interlaced scan ({self.media_info.video.field_order}). Deinterlacing will be applied.")
                 self.config.deinterlace = True
 
-            # Stage 1b: Engine Cache Check
-            self.sig_log.emit("Stage 1b: Checking TensorRT engine cache and downloaded models...")
+            # Stage 1b: Engine Cache Check & On-Demand TensorRT Auto-Compilation
+            self.sig_log.emit("Stage 1b: Checking TensorRT engine cache and available AI models...")
+            in_res = (self.media_info.display_width, self.media_info.display_height)
             engine_info = self.cache_mgr.get_engine_info(
                 self.config.model_name,
-                (self.media_info.width, self.media_info.height),
+                in_res,
                 fp16=True
             )
-            status_desc = "Cached Engine" if engine_info.exists else ("Downloaded Model" if engine_info.source_model_path else "Uncached (Filtergraph Fallback)")
+
+            # Auto-compile TensorRT engine upfront if missing and compiler + ONNX model are available
+            if not engine_info.exists and is_vspipe_available() and self.cache_mgr.is_trtexec_available():
+                onnx_path = self.cache_mgr.find_onnx_model_source(self.config.model_name)
+                if onnx_path:
+                    try:
+                        self.sig_log.emit(
+                            f"[TensorRT Auto-Compiler] Engine for {in_res[0]}x{in_res[1]} not found in cache. "
+                            f"Auto-compiling from '{Path(onnx_path).name}' on {self.cache_mgr.gpu_name}..."
+                        )
+                        self.sig_status_change.emit(f"Auto-compiling TensorRT engine ({in_res[0]}x{in_res[1]})...")
+                        engine_info = self.cache_mgr.compile_engine(
+                            onnx_model_path=onnx_path,
+                            model_name=self.config.model_name,
+                            input_resolution=in_res,
+                            fp16=True
+                        )
+                        self.sig_log.emit(f"[TensorRT Auto-Compiler] Engine successfully compiled: {Path(engine_info.engine_path).name}")
+                    except Exception as comp_err:
+                        self.sig_log.emit(f"[TensorRT Auto-Compiler] Auto-compilation failed ({comp_err}). Falling back.")
+
+            status_desc = "Cached Engine" if engine_info.exists else ("Downloaded Model" if engine_info.source_model_path else "Uncached (Fallback)")
             self.sig_log.emit(
                 f"Engine key: {engine_info.cache_key} (GPU: {engine_info.gpu_name}, Status: {status_desc})"
             )
@@ -189,28 +211,27 @@ class PipelineWorker(QThread):
         previously_rendered_frames: int
     ) -> int:
         """Execute a single segment via VapourSynth TensorRT, Native Real-ESRGAN GPU Engine, or FFmpeg fallback."""
+        in_res = (self.media_info.display_width, self.media_info.display_height)
         engine_info = self.cache_mgr.get_engine_info(
             model_name=self.config.model_name,
-            input_resolution=(self.media_info.width, self.media_info.height),
+            input_resolution=in_res,
             fp16=True
         )
 
         # On-demand TensorRT engine compilation if ONNX source is present but engine for this resolution is not yet compiled
         if not engine_info.exists and is_vspipe_available() and self.cache_mgr.is_trtexec_available():
-            onnx_path = engine_info.source_model_path or self.cache_mgr.find_model_source(self.config.model_name)
-            if not onnx_path:
-                onnx_path = self.cache_mgr.find_model_source("realesr-general-x4v3")
-            if onnx_path and onnx_path.lower().endswith(".onnx"):
+            onnx_path = self.cache_mgr.find_onnx_model_source(self.config.model_name)
+            if onnx_path:
                 try:
                     self.sig_log.emit(
-                        f"[TensorRT Auto-Compiler] Compiling TensorRT engine for {self.media_info.width}x{self.media_info.height} "
+                        f"[TensorRT Auto-Compiler] Compiling TensorRT engine for {in_res[0]}x{in_res[1]} "
                         f"on {self.cache_mgr.gpu_name} (takes ~5s)..."
                     )
                     self.sig_status_change.emit("Compiling TensorRT GPU engine on RTX GPU...")
                     engine_info = self.cache_mgr.compile_engine(
                         onnx_model_path=onnx_path,
                         model_name=self.config.model_name,
-                        input_resolution=(self.media_info.width, self.media_info.height),
+                        input_resolution=in_res,
                         fp16=True
                     )
                     self.sig_log.emit(f"[TensorRT Auto-Compiler] Engine compiled successfully: {Path(engine_info.engine_path).name}")
@@ -290,9 +311,10 @@ class PipelineWorker(QThread):
         start_frame = int(round(seg.start_sec * fps)) if seg.start_sec > 0 else 0
         num_frames = int(round(seg.duration_sec * fps)) if seg.duration_sec > 0 else None
 
+        in_res = (self.media_info.display_width, self.media_info.display_height)
         engine_info = self.cache_mgr.get_engine_info(
             model_name=self.config.model_name,
-            input_resolution=(self.media_info.width, self.media_info.height),
+            input_resolution=in_res,
             fp16=True,
             tiles=tiles
         )

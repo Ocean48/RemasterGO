@@ -174,14 +174,38 @@ def run_cli(args: argparse.Namespace) -> int:
     if not output_path.lower().endswith(".mkv"):
         output_path = f"{os.path.splitext(output_path)[0]}.mkv"
 
-    # Parse resolution
-    tw, th = 1920, 1080
-    if args.resolution:
+    # Probe media
+    media = probe_media(input_path)
+
+    # Parse resolution or scale multiplier
+    if args.scale is not None and args.scale > 0:
+        tw = int(round(media.display_width * args.scale))
+        th = int(round(media.display_height * args.scale))
+    elif args.resolution and ("x" in args.resolution.lower() and not any(args.resolution.lower().startswith(p) for p in ("1x", "2x", "3x", "4x"))):
         try:
             parts = args.resolution.lower().split("x")
             tw, th = int(parts[0]), int(parts[1])
         except Exception:
+            tw, th = 1920, 1080
             print(f"Warning: Invalid resolution '{args.resolution}', defaulting to 1920x1080.")
+    elif args.resolution and args.resolution.lower().endswith("x"):
+        try:
+            s_mult = float(args.resolution.lower().replace("x", ""))
+            tw = int(round(media.display_width * s_mult))
+            th = int(round(media.display_height * s_mult))
+        except Exception:
+            tw, th = 1920, 1080
+    elif media.is_portrait:
+        tw, th = 1080, 1920
+    else:
+        tw, th = 1920, 1080
+
+    if media.is_portrait and tw > th and not args.resolution and args.scale is None:
+        tw, th = th, tw
+
+    # Enforce even dimensions for codec compatibility
+    tw = tw + (tw % 2)
+    th = th + (th % 2)
 
     print("=" * 60)
     print("RemasterGO Headless Video Restoration & Upscaling Engine")
@@ -189,6 +213,7 @@ def run_cli(args: argparse.Namespace) -> int:
     print(f"Input:       {input_path}")
     print(f"Output:      {output_path}")
     print(f"Resolution:  {tw}x{th}")
+    print(f"Orientation: {'Portrait' if media.is_portrait else 'Landscape'} ({media.display_width}x{media.display_height}, Rotation: {media.rotation}°)")
     print(f"Model:       {args.model}")
     print(f"Encoder:     {args.encoder}")
     print(f"Blend:       {int(args.blend * 100)}% AI / {int((1.0 - args.blend) * 100)}% Original")
@@ -200,9 +225,6 @@ def run_cli(args: argparse.Namespace) -> int:
     app = QCoreApplication.instance()
     if app is None:
         app = QCoreApplication(sys.argv)
-
-    # Probe media
-    media = probe_media(input_path)
 
     deinterlace = args.deinterlace or (media.video.is_interlaced if media.video else False)
 
@@ -305,7 +327,8 @@ def main() -> int:
     parser.add_argument("--cli", action="store_true", help="Run in headless CLI mode instead of GUI")
     parser.add_argument("-i", "--input", type=str, help="Input video file path")
     parser.add_argument("-o", "--output", type=str, help="Target output video file path (enforced .mkv, default: input video location)")
-    parser.add_argument("-r", "--resolution", type=str, default="1920x1080", help="Target resolution (e.g. 1920x1080, 2560x1440, 3840x2160)")
+    parser.add_argument("-s", "--scale", type=float, default=None, help="Scale factor multiplier relative to source video (e.g. 2 for 2x, 4 for 4x). Overrides -r.")
+    parser.add_argument("-r", "--resolution", type=str, default="1920x1080", help="Target resolution (e.g. 1920x1080, 2560x1440, 3840x2160, or 2x/4x)")
     parser.add_argument("-m", "--model", type=str, default="Real-ESRGAN_x4", help="AI model name")
     parser.add_argument("-e", "--encoder", type=str, default="hevc_nvenc", help="Video encoder (hevc_nvenc, h264_nvenc, libx265, libx264)")
     parser.add_argument("-b", "--blend", type=float, default=0.8, help="AI to original texture blend ratio (0.0 to 1.0)")

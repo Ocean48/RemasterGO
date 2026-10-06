@@ -123,6 +123,8 @@ def test_ffmpeg_cmd_parameters():
     assert "hevc_nvenc" in cmd
     assert "-cq" in cmd
     assert "18" in cmd
+    assert "-metadata:s:v:0" in cmd
+    assert "rotate=0" in cmd
     assert "-fps_mode" in cmd
     assert "passthrough" in cmd
     assert "-f" in cmd

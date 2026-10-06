@@ -158,6 +158,7 @@ class FiltergraphBuilder:
 
         # PTS preservation and MKV container enforcement
         cmd.extend([
+            "-metadata:s:v:0", "rotate=0",
             "-fps_mode", "passthrough",
             "-f", "matroska",
             target_out
@@ -211,16 +212,24 @@ class FiltergraphBuilder:
         orig_weight = max(0.0, min(1.0, 1.0 - ai_weight))
         grain_strength = max(0, min(30, strategy.film_grain_intensity))
 
-        filter_steps = [
-            f"[0:v]setpts=PTS-STARTPTS[ai_pipe]",
-            f"[1:v]setpts=PTS-STARTPTS,fps={effective_fps:.4f},scale={tw}:{th}:flags=spline[scaled_orig]",
-            f"[ai_pipe][scaled_orig]blend=all_expr='A*{ai_weight:.2f}+B*{orig_weight:.2f}':shortest=1[blended]"
-        ]
+        if orig_weight > 0.01:
+            filter_steps = [
+                f"[0:v]setpts=PTS-STARTPTS[ai_pipe]",
+                f"[1:v]setpts=PTS-STARTPTS,fps={effective_fps:.4f},scale={tw}:{th}:flags=spline[scaled_orig]",
+                f"[ai_pipe][scaled_orig]blend=all_expr='A*{ai_weight:.2f}+B*{orig_weight:.2f}':shortest=1[blended]"
+            ]
+            current_v = "[blended]"
+        else:
+            filter_steps = [
+                f"[0:v]setpts=PTS-STARTPTS[ai_pipe]"
+            ]
+            current_v = "[ai_pipe]"
+
         if grain_strength > 0:
-            filter_steps.append(f"[blended]noise=alls={grain_strength}:allf=t+u[final_video]")
+            filter_steps.append(f"{current_v}noise=alls={grain_strength}:allf=t+u[final_video]")
             final_v = "[final_video]"
         else:
-            final_v = "[blended]"
+            final_v = current_v
 
         cmd.extend(["-filter_complex", "; ".join(filter_steps)])
         cmd.extend(["-map", final_v])
@@ -261,6 +270,7 @@ class FiltergraphBuilder:
             ])
 
         cmd.extend([
+            "-metadata:s:v:0", "rotate=0",
             "-shortest",
             "-fps_mode", "passthrough",
             "-f", "matroska",

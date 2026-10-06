@@ -78,7 +78,7 @@ def run_ai_segment_upscale(
 
     ffmpeg_bin = get_binary_path("ffmpeg")
     fps = media.fps or 30.0
-    scale = calculate_scale_factor(media.width, media.height, strategy.target_width, strategy.target_height)
+    scale = calculate_scale_factor(media.display_width, media.display_height, strategy.target_width, strategy.target_height)
     model_name = resolve_model_name(strategy.model_name)
 
     # Ensure model supports the chosen scale
@@ -209,19 +209,6 @@ def run_ai_segment_upscale(
         ai_weight = max(0.0, min(1.0, strategy.blend_ai_ratio))
         orig_weight = max(0.0, min(1.0, 1.0 - ai_weight))
 
-        # Build filtergraph: Blend AI video stream with spline-scaled original video for texture preservation
-        # Ensure PTS alignment, framerate synchronization, and shortest=1 to prevent stream deadlocks
-        filter_steps = [
-            f"[0:v]setpts=PTS-STARTPTS,scale={tw}:{th}:flags=spline[ai_scaled]",
-            f"[1:v]setpts=PTS-STARTPTS,fps={fps:.4f},scale={tw}:{th}:flags=spline[orig_scaled]",
-            f"[ai_scaled][orig_scaled]blend=all_expr='A*{ai_weight:.2f}+B*{orig_weight:.2f}':shortest=1[blended]"
-        ]
-        if grain > 0:
-            filter_steps.append(f"[blended]noise=alls={grain}:allf=t+u[final_v]")
-            final_label = "[final_v]"
-        else:
-            final_label = "[blended]"
-
         encode_cmd = [
             ffmpeg_bin, "-y",
             "-progress", "pipe:1",
@@ -230,7 +217,34 @@ def run_ai_segment_upscale(
             "-i", str(frames_out / "frame_%08d.png")
         ]
 
-        # Audio and original video stream from source (Input 1)
+        # If micro-texture blending is requested, blend with the EXACT extracted input frames (frames_in)
+        # This guarantees 100% pixel-coordinate, orientation, and frame-count parity with zero overlay distortion
+        if orig_weight > 0.01 and frames_in.is_dir():
+            encode_cmd.extend([
+                "-framerate", f"{fps:.4f}",
+                "-i", str(frames_in / "frame_%08d.png")
+            ])
+            filter_steps = [
+                f"[0:v]setpts=PTS-STARTPTS,scale={tw}:{th}:flags=spline[ai_scaled]",
+                f"[1:v]setpts=PTS-STARTPTS,scale={tw}:{th}:flags=spline[orig_scaled]",
+                f"[ai_scaled][orig_scaled]blend=all_expr='A*{ai_weight:.2f}+B*{orig_weight:.2f}'[blended]"
+            ]
+            current_v = "[blended]"
+            audio_source_idx = 2
+        else:
+            filter_steps = [
+                f"[0:v]setpts=PTS-STARTPTS,scale={tw}:{th}:flags=spline[ai_scaled]"
+            ]
+            current_v = "[ai_scaled]"
+            audio_source_idx = 1
+
+        if grain > 0:
+            filter_steps.append(f"{current_v}noise=alls={grain}:allf=t+u[final_v]")
+            final_label = "[final_v]"
+        else:
+            final_label = current_v
+
+        # Audio stream from source media
         if seg.start_sec > 0:
             encode_cmd.extend(["-ss", f"{seg.start_sec:.4f}"])
         encode_cmd.extend(["-i", strategy.input_path])
@@ -240,7 +254,7 @@ def run_ai_segment_upscale(
         encode_cmd.extend([
             "-filter_complex", "; ".join(filter_steps),
             "-map", final_label,
-            "-map", "1:a?",
+            "-map", f"{audio_source_idx}:a?",
             "-fps_mode", "passthrough"
         ])
 
@@ -269,6 +283,7 @@ def run_ai_segment_upscale(
             encode_cmd.append("-an")
 
         encode_cmd.extend([
+            "-metadata:s:v:0", "rotate=0",
             "-f", "matroska",
             seg.output_path
         ])

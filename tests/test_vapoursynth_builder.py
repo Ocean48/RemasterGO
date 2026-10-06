@@ -99,6 +99,17 @@ def test_build_vapoursynth_script_tiled_oom_fallback(sample_strategy, sample_med
     assert "core.trt.Model" in script
 
 
+def test_build_vapoursynth_script_with_rotation(sample_strategy, sample_media):
+    sample_media.video.rotation = 90
+    script = VapourSynthScriptBuilder.build_script(
+        strategy=sample_strategy,
+        media=sample_media,
+        engine_path="cache/engines/test_engine.engine"
+    )
+    assert "core.std.Transpose(clip)" in script
+    assert "core.std.FlipHorizontal(clip)" in script
+
+
 def test_write_script_file(sample_strategy, sample_media, tmp_path):
     out_vpy = tmp_path / "test_pipeline.vpy"
     res_path = VapourSynthScriptBuilder.write_script_file(
