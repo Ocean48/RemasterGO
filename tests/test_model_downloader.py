@@ -5,7 +5,6 @@ from pathlib import Path
 
 from core.model_downloader import (
     MODEL_CATALOG,
-    EngineDownloadWorker,
     ModelDownloadWorker,
     ModelManager,
     PretrainedModelEntry,
@@ -58,19 +57,6 @@ def test_model_download_worker_init():
         assert worker._is_cancelled
 
 
-def test_engine_download_worker_init():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        target_path = str(Path(tmpdir) / "test.engine")
-        worker = EngineDownloadWorker(
-            url="https://example.com/fake.engine",
-            target_engine_path=target_path
-        )
-        assert worker.url == "https://example.com/fake.engine"
-        assert not worker._is_cancelled
-        worker.cancel()
-        assert worker._is_cancelled
-
-
 def test_model_manager_sync_downloads(monkeypatch):
     import io
 
@@ -111,13 +97,5 @@ def test_model_manager_sync_downloads(monkeypatch):
         assert Path(saved).is_file()
         assert Path(saved).read_bytes() == b"dummy content data"
         assert len(progress_calls) > 0
-
-        engine_path = Path(tmpdir) / "test_engine.engine"
-        saved_eng = mgr.download_engine_sync(
-            "https://example.com/fake.engine",
-            str(engine_path)
-        )
-        assert Path(saved_eng).is_file()
-        assert Path(saved_eng).read_bytes() == b"dummy content data"
 
 

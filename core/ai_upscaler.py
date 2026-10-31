@@ -35,10 +35,33 @@ def is_ai_binary_available() -> bool:
 
 
 def resolve_model_name(selected_name: str) -> str:
-    """Map UI/CLI model selection to the closest embedded Real-ESRGAN neural network model."""
+    """Map UI/CLI model selection to the closest embedded Real-ESRGAN NCNN Vulkan neural network model."""
+    raw_token = selected_name.strip().split()[0] if selected_name.strip() else ""
+    models_dir = Path(__file__).resolve().parent.parent / "bin" / "realesrgan" / "models"
+    if raw_token and (models_dir / f"{raw_token}.param").is_file():
+        return raw_token
+
     clean = selected_name.lower().replace("-", "").replace("_", "").replace(" ", "")
-    if "anime" in clean and ("6b" in clean or "x4plus" in clean):
+    if "uniscale" in clean:
+        return "uniscale_restore"
+    elif "ultramix" in clean:
+        return "ultramix-balanced-4x"
+    elif "highfidelity" in clean:
+        return "high-fidelity-4x"
+    elif "remacri" in clean:
+        return "remacri-4x"
+    elif "ultrasharp" in clean and "anime" not in clean:
+        return "ultrasharp-4x"
+    elif "nomos2" in clean or "otf" in clean:
+        return "Nomos2_OTF_ESRGAN_x4"
+    elif "nomos" in clean:
+        return "4xNomos8kSC"
+    elif "wdn" in clean:
+        return "RealESRGAN_General_WDN_x4_v3"
+    elif "anime" in clean and ("6b" in clean or "x4plus" in clean or "sharp" in clean):
         return "realesrgan-x4plus-anime"
+    elif "plksr" in clean or "clearreality" in clean:
+        return "realesrgan-x4plus"
     elif "anime" in clean or "span" in clean or "compact" in clean:
         return "realesr-animevideov3"
     elif "x4" in clean or "realesrgan" in clean or "balanced" in clean:
@@ -81,8 +104,8 @@ def run_ai_segment_upscale(
     scale = calculate_scale_factor(media.display_width, media.display_height, strategy.target_width, strategy.target_height)
     model_name = resolve_model_name(strategy.model_name)
 
-    # Ensure model supports the chosen scale
-    if model_name in ("realesrgan-x4plus", "realesrgan-x4plus-anime"):
+    # Ensure model supports the chosen scale (all 4x NCNN models except realesr-animevideov3 require scale=4)
+    if model_name != "realesr-animevideov3":
         scale = 4
 
     job_cache = Path("cache") / Path(strategy.output_path).stem
@@ -114,8 +137,24 @@ def run_ai_segment_upscale(
         if seg.duration_sec > 0:
             extract_cmd.extend(["-t", f"{seg.duration_sec:.4f}"])
 
+        # Pre-processing before AI upscaling: deinterlace and remove compression blockiness so AI enhances true edges
+        pre_filters: list[str] = []
+        if strategy.deinterlace:
+            parity = "tff" if strategy.field_order == "tff" else ("bff" if strategy.field_order == "bff" else "auto")
+            pre_filters.append(f"bwdif=mode=send_field:parity={parity}:deint=all")
+        if strategy.denoise:
+            luma_s = max(2.0, strategy.denoise_strength * 1.8)
+            chroma_s = max(2.5, strategy.denoise_strength * 2.2)
+            luma_t = max(3.0, strategy.denoise_strength * 2.6)
+            chroma_t = max(3.5, strategy.denoise_strength * 3.0)
+            pre_filters.append("deblock=filter=strong:block=4")
+            pre_filters.append(f"hqdn3d={luma_s:.1f}:{chroma_s:.1f}:{luma_t:.1f}:{chroma_t:.1f}")
+
+        if pre_filters:
+            extract_cmd.extend(["-vf", ",".join(pre_filters)])
+
         extract_cmd.extend([
-            "-q:v", "2",
+            "-compression_level", "1",
             str(frames_in / "frame_%08d.png")
         ])
 
@@ -127,9 +166,10 @@ def run_ai_segment_upscale(
             return 0
 
         if log_cb:
-            log_cb(f"[AI Engine] Running Real-ESRGAN {model_name} (Scale {scale}x) on RTX GPU ({total_frames_in_seg} frames)...")
+            tta_tag = " [TTA 8x Quality Mode]" if getattr(strategy, "tta_mode", False) else ""
+            log_cb(f"[AI Engine] Running Real-ESRGAN Vulkan '{model_name}' (Scale {scale}x, 200px VRAM-Safe Tiles){tta_tag} ({total_frames_in_seg} frames)...")
 
-        # Step 2: GPU AI Upscaling
+        # Step 2: GPU AI Upscaling (200px tile size guarantees safe execution on 4GB/6GB/8GB VRAM GPUs)
         ai_models_dir = (Path(ai_bin).parent / "models").resolve()
         ai_cmd = [
             ai_bin,
@@ -137,11 +177,14 @@ def run_ai_segment_upscale(
             "-o", str(frames_out.resolve()),
             "-n", model_name,
             "-s", str(scale),
+            "-t", "200",
             "-m", str(ai_models_dir),
             "-g", "0",
             "-j", "2:2:2",
             "-f", "png"
         ]
+        if getattr(strategy, "tta_mode", False):
+            ai_cmd.append("-x")
 
         ai_proc = subprocess.Popen(
             ai_cmd,
@@ -219,21 +262,22 @@ def run_ai_segment_upscale(
 
         # If micro-texture blending is requested, blend with the EXACT extracted input frames (frames_in)
         # This guarantees 100% pixel-coordinate, orientation, and frame-count parity with zero overlay distortion
+        post_chain = "hqdn3d=1.8:1.4:2.8:2.2,cas=strength=0.25" if strategy.denoise else "cas=strength=0.35"
         if orig_weight > 0.01 and frames_in.is_dir():
             encode_cmd.extend([
                 "-framerate", f"{fps:.4f}",
                 "-i", str(frames_in / "frame_%08d.png")
             ])
             filter_steps = [
-                f"[0:v]setpts=PTS-STARTPTS,scale={tw}:{th}:flags=spline[ai_scaled]",
+                f"[0:v]setpts=PTS-STARTPTS,scale={tw}:{th}:flags=lanczos+accurate_rnd+full_chroma_int[ai_scaled]",
                 f"[1:v]setpts=PTS-STARTPTS,scale={tw}:{th}:flags=spline[orig_scaled]",
-                f"[ai_scaled][orig_scaled]blend=all_expr='A*{ai_weight:.2f}+B*{orig_weight:.2f}'[blended]"
+                f"[ai_scaled][orig_scaled]blend=all_expr='A*{ai_weight:.2f}+B*{orig_weight:.2f}',{post_chain}[blended]"
             ]
             current_v = "[blended]"
             audio_source_idx = 2
         else:
             filter_steps = [
-                f"[0:v]setpts=PTS-STARTPTS,scale={tw}:{th}:flags=spline[ai_scaled]"
+                f"[0:v]setpts=PTS-STARTPTS,scale={tw}:{th}:flags=lanczos+accurate_rnd+full_chroma_int,{post_chain}[ai_scaled]"
             ]
             current_v = "[ai_scaled]"
             audio_source_idx = 1
@@ -263,13 +307,27 @@ def run_ai_segment_upscale(
             encode_cmd.extend([
                 "-c:v", encoder,
                 "-preset", strategy.preset,
+                "-tune", "hq",
+                "-rc", "vbr",
                 "-cq", str(strategy.cq),
+                "-b:v", "0",
+                "-spatial-aq", "1",
+                "-temporal-aq", "1",
+                "-aq-strength", "8",
+                "-pix_fmt", "yuv420p"
+            ])
+        elif encoder in ("libx265", "hevc"):
+            encode_cmd.extend([
+                "-c:v", "libx265",
+                "-crf", str(strategy.cq),
+                "-preset", "medium",
                 "-pix_fmt", "yuv420p"
             ])
         else:
             encode_cmd.extend([
                 "-c:v", "libx264",
                 "-crf", str(strategy.cq),
+                "-preset", "medium",
                 "-pix_fmt", "yuv420p"
             ])
 

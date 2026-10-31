@@ -30,21 +30,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.cache_manager import EngineCacheManager
 from core.job_queue import JobItem, JobQueueController
 from core.model_downloader import (
-    EngineDownloadWorker,
     ModelDownloadWorker,
     ModelManager,
     PretrainedModelEntry,
 )
-from core.probe import MediaMetadata, StrategyConfig, detect_scene_cuts, probe_media
+from core.probe import MediaMetadata, StrategyConfig, detect_gpu_name, detect_scene_cuts, probe_media
 from ui.theme import DARK_STYLE
 from ui.widgets import (
-    CompileEngineDialog,
-    DownloadEngineDialog,
     DropTableWidget,
-    EngineCacheInspectorDialog,
     MetricCard,
     StatusBadge,
 )
@@ -59,7 +54,7 @@ class MainWindow(QMainWindow):
         self.resize(1260, 860)
         self.setMinimumSize(980, 680)
 
-        self.cache_mgr = EngineCacheManager()
+        self.gpu_name = detect_gpu_name()
         self.model_mgr = ModelManager()
         self.queue_controller = JobQueueController(self)
         self.active_download_worker: Optional[ModelDownloadWorker] = None
@@ -69,7 +64,7 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._connect_signals()
 
-        self.log(f"RemasterGO initialized. Detected hardware: {self.cache_mgr.gpu_name}")
+        self.log(f"RemasterGO initialized. Detected hardware: {self.gpu_name}")
         self.log("Output destination: Same as input video location (default)")
 
     def _setup_ui(self):
@@ -94,14 +89,9 @@ class MainWindow(QMainWindow):
         header_layout.addLayout(title_box)
         header_layout.addStretch()
 
-        gpu_lbl = QLabel(f"GPU: {self.cache_mgr.gpu_name} (NVENC Accelerated)")
+        gpu_lbl = QLabel(f"GPU: {self.gpu_name} (Vulkan AI + NVENC)")
         gpu_lbl.setObjectName("GpuBadge")
         header_layout.addWidget(gpu_lbl)
-
-        self.btn_inspect_cache = QPushButton("Engine Cache...")
-        self.btn_inspect_cache.setStyleSheet("font-size: 11px; padding: 4px 10px; background-color: #2c2c3d; border-radius: 6px;")
-        self.btn_inspect_cache.clicked.connect(self._open_engine_cache_inspector)
-        header_layout.addWidget(self.btn_inspect_cache)
 
         main_layout.addLayout(header_layout)
 
@@ -116,7 +106,7 @@ class MainWindow(QMainWindow):
 
         self.tabs.addTab(tab_queue, "Queue & Processing")
         self.tabs.addTab(tab_settings, "Restoration Settings")
-        self.tabs.addTab(tab_models, "AI Models & Engines")
+        self.tabs.addTab(tab_models, "AI Models")
         self.tabs.addTab(tab_logs, "Execution Logs")
 
         main_layout.addWidget(self.tabs, 1)
@@ -313,16 +303,52 @@ class MainWindow(QMainWindow):
         self.combo_model = QComboBox()
         self.combo_model.setToolTip(tip_model)
         self.combo_model.addItems([
-            "realesr-general-x4v3 (TensorRT ONNX)",
-            "Real-ESRGAN_x4plus (General Real-World Video)",
-            "RealESRGAN_x4plus_anime_6B (Anime & Animation)",
-            "realesr-animevideov3 (Anime & Fast Video)",
-            "RealESRGAN_x2plus (General Video 2x)",
-            "SPAN (Fast Film / Anime)"
+            "Nomos2_OTF_ESRGAN_x4 (Degraded / Noisy Old Video)",
+            "uniscale_restore (Degraded / Old Video Restoration)",
+            "ultramix-balanced-4x (Balanced Natural Detail & Low Noise)",
+            "high-fidelity-4x (High-Fidelity Photorealistic Video)",
+            "realesrgan-x4plus (General Real-World Video 4x)",
+            "4xNomos8kSC (Compression-Resistant Film & Video 4x)",
+            "remacri-4x (Fine Texture & Film Restoration 4x)",
+            "ultrasharp-4x (Maximum Edge Sharpness 4x)",
+            "RealESRGAN_General_WDN_x4_v3 (Fast Video with Denoise 4x)",
+            "realesrgan-x4plus-anime (Anime & Sharp Line-Art 6B 4x)",
+            "realesr-animevideov3 (Fast Animation & Temporal Stability)"
         ])
         model_row.addWidget(model_lbl)
         model_row.addWidget(self.combo_model, 1)
         res_layout.addLayout(model_row)
+
+        # Selected Model Guide Card (Best For / Pros / Cons / Recommended Denoise)
+        self.frame_model_guide = QWidget()
+        self.frame_model_guide.setObjectName("ModelGuideCard")
+        self.frame_model_guide.setStyleSheet(
+            "QWidget#ModelGuideCard { background-color: #161b26; border: 1px solid #2d3748; border-radius: 8px; }"
+        )
+        guide_layout = QVBoxLayout(self.frame_model_guide)
+        guide_layout.setContentsMargins(14, 10, 14, 10)
+        guide_layout.setSpacing(6)
+
+        guide_hdr_row = QHBoxLayout()
+        self.lbl_guide_title = QLabel("Model Guide")
+        self.lbl_guide_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #38bdf8; border: none; background: transparent;")
+        self.btn_apply_rec_denoise = QPushButton("Apply Recommended Denoise")
+        self.btn_apply_rec_denoise.setStyleSheet(
+            "background-color: #1e293b; color: #7dd3fc; border: 1px solid #0284c7; "
+            "font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 5px;"
+        )
+        self.btn_apply_rec_denoise.clicked.connect(self._apply_recommended_denoise_for_current_model)
+        guide_hdr_row.addWidget(self.lbl_guide_title, 1)
+        guide_hdr_row.addWidget(self.btn_apply_rec_denoise)
+        guide_layout.addLayout(guide_hdr_row)
+
+        self.lbl_guide_body = QLabel()
+        self.lbl_guide_body.setWordWrap(True)
+        self.lbl_guide_body.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_guide_body.setStyleSheet("font-size: 12px; border: none; background: transparent;")
+        guide_layout.addWidget(self.lbl_guide_body)
+
+        res_layout.addWidget(self.frame_model_guide)
 
         layout.addWidget(grp_res)
 
@@ -370,15 +396,38 @@ class MainWindow(QMainWindow):
         self.chk_deinterlace.setToolTip(tip_deinterlace)
         clean_layout.addWidget(self.chk_deinterlace)
 
-        self.chk_denoise = QCheckBox("Analog Tape Denoise (KNLMeansCL / hqdn3d spatial-temporal)")
+        self.chk_denoise = QCheckBox("Analog Tape Denoise & Deblock (Deblock + TTempSmooth + Joint Bilateral)")
         self.chk_denoise.setChecked(True)
         self.chk_denoise.setToolTip(tip_denoise)
         clean_layout.addWidget(self.chk_denoise)
+
+        denoise_str_box = QVBoxLayout()
+        self.lbl_denoise_strength = QLabel("Denoise & Deblock Strength: 2.2 (Strong Old-Video Cleanup)")
+        self.lbl_denoise_strength.setToolTip(tip_denoise)
+        self.slider_denoise_strength = QSlider(Qt.Orientation.Horizontal)
+        self.slider_denoise_strength.setToolTip(tip_denoise)
+        self.slider_denoise_strength.setRange(5, 40)
+        self.slider_denoise_strength.setValue(22)
+        self.slider_denoise_strength.valueChanged.connect(self._on_denoise_strength_changed)
+        denoise_str_box.addWidget(self.lbl_denoise_strength)
+        denoise_str_box.addWidget(self.slider_denoise_strength)
+        clean_layout.addLayout(denoise_str_box)
 
         self.chk_scene_cuts = QCheckBox("Detect Scene Cut Boundaries (Align Checkpoint Segments & Prevent Tearing)")
         self.chk_scene_cuts.setChecked(True)
         self.chk_scene_cuts.setToolTip(tip_scene_cuts)
         clean_layout.addWidget(self.chk_scene_cuts)
+
+        self.chk_tta = QCheckBox("High-Precision TTA Mode (8x Geometric Ensemble - Maximum Final Video Quality, Slower)")
+        self.chk_tta.setChecked(False)
+        self.chk_tta.setToolTip(
+            "<div style='font-size: 12px; line-height: 1.4;'>"
+            "<p style='font-size: 13px; font-weight: bold; color: #38bdf8; margin: 0 0 4px 0;'>Test-Time Augmentation (TTA 8x Ensemble)</p>"
+            "<p style='color: #e2e8f0; margin: 0 0 6px 0;'>Upscales each tile across 8 geometric rotations/reflections and averages the predictions.</p>"
+            "<p style='color: #86efac; margin: 0;'>• Eliminates directional GAN artifacts and produces the highest possible final video clarity.<br>"
+            "• Uses 200px VRAM-safe tiling (safe on 6GB/8GB GPUs), at ~4-6x longer inference time.</p></div>"
+        )
+        clean_layout.addWidget(self.chk_tta)
 
         layout.addWidget(grp_cleaning)
 
@@ -413,24 +462,24 @@ class MainWindow(QMainWindow):
         )
 
         blend_box = QVBoxLayout()
-        self.lbl_blend = QLabel("Micro-Texture Blend: 80% AI / 20% Original")
+        self.lbl_blend = QLabel("Micro-Texture Blend: 100% AI / 0% Original")
         self.lbl_blend.setToolTip(tip_blend)
         self.slider_blend = QSlider(Qt.Orientation.Horizontal)
         self.slider_blend.setToolTip(tip_blend)
         self.slider_blend.setRange(0, 100)
-        self.slider_blend.setValue(80)
+        self.slider_blend.setValue(100)
         self.slider_blend.valueChanged.connect(self._on_blend_changed)
         blend_box.addWidget(self.lbl_blend)
         blend_box.addWidget(self.slider_blend)
         tune_layout.addLayout(blend_box)
 
         grain_box = QVBoxLayout()
-        self.lbl_grain = QLabel("Dynamic Film Grain: 6 (Subtle)")
+        self.lbl_grain = QLabel("Dynamic Film Grain: 0 (Off)")
         self.lbl_grain.setToolTip(tip_grain)
         self.slider_grain = QSlider(Qt.Orientation.Horizontal)
         self.slider_grain.setToolTip(tip_grain)
         self.slider_grain.setRange(0, 20)
-        self.slider_grain.setValue(6)
+        self.slider_grain.setValue(0)
         self.slider_grain.valueChanged.connect(self._on_grain_changed)
         grain_box.addWidget(self.lbl_grain)
         grain_box.addWidget(self.slider_grain)
@@ -540,15 +589,14 @@ class MainWindow(QMainWindow):
         return tab
 
     def _create_models_tab(self) -> QWidget:
-        """Tab 3: Pretrained AI Model Downloader and TensorRT Engine Manager."""
+        """Tab 3: Pretrained NCNN Vulkan AI Model Manager."""
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(14)
 
-        # Section 1: Pretrained AI Models
         models_hdr = QHBoxLayout()
-        models_title = QLabel("Pretrained AI Model Downloader")
+        models_title = QLabel("Pretrained NCNN Vulkan AI Models (VRAM-Safe Tiled GPU Execution)")
         models_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #f8fafc;")
         models_hdr.addWidget(models_title)
         models_hdr.addStretch()
@@ -558,7 +606,6 @@ class MainWindow(QMainWindow):
         models_hdr.addWidget(self.btn_refresh_models)
         layout.addLayout(models_hdr)
 
-        # Models Table
         self.table_models = QTableWidget()
         self.table_models.setColumnCount(6)
         self.table_models.setHorizontalHeaderLabels([
@@ -569,16 +616,40 @@ class MainWindow(QMainWindow):
         self.table_models.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.table_models.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table_models.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self.table_models.setColumnWidth(5, 240)
+        self.table_models.setColumnWidth(5, 220)
         self.table_models.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Interactive)
         self.table_models.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table_models.verticalHeader().setDefaultSectionSize(54)
-        self.table_models.setFixedHeight(270)
-        layout.addWidget(self.table_models)
+        self.table_models.verticalHeader().setDefaultSectionSize(52)
+        self.table_models.itemSelectionChanged.connect(self._on_catalog_table_selection_changed)
+        layout.addWidget(self.table_models, 1)
 
-        # Active Model Download Status & Progress Bar
+        # Interactive Model Details & Pros/Cons Panel in AI Models Tab
+        catalog_guide_box = QGroupBox("Selected Model Guide (GoodFor / Pros / Cons)")
+        catalog_guide_layout = QVBoxLayout(catalog_guide_box)
+        catalog_guide_layout.setContentsMargins(12, 10, 12, 10)
+        catalog_guide_layout.setSpacing(6)
+
+        catalog_guide_hdr = QHBoxLayout()
+        self.lbl_catalog_guide_title = QLabel("Click any model above to inspect its Pros, Cons, and Best Use Case")
+        self.lbl_catalog_guide_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #38bdf8;")
+        self.btn_use_catalog_model = QPushButton("Use This Model in Restoration Settings")
+        self.btn_use_catalog_model.setStyleSheet(
+            "background-color: #0284c7; color: #ffffff; font-weight: 600; font-size: 11px; padding: 5px 12px; border-radius: 5px;"
+        )
+        self.btn_use_catalog_model.clicked.connect(self._use_selected_catalog_model)
+        catalog_guide_hdr.addWidget(self.lbl_catalog_guide_title, 1)
+        catalog_guide_hdr.addWidget(self.btn_use_catalog_model)
+        catalog_guide_layout.addLayout(catalog_guide_hdr)
+
+        self.lbl_catalog_guide_body = QLabel()
+        self.lbl_catalog_guide_body.setWordWrap(True)
+        self.lbl_catalog_guide_body.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_catalog_guide_body.setStyleSheet("font-size: 12px;")
+        catalog_guide_layout.addWidget(self.lbl_catalog_guide_body)
+        layout.addWidget(catalog_guide_box)
+
         download_box = QVBoxLayout()
-        self.lbl_download_status = QLabel("Ready to download models and engines.")
+        self.lbl_download_status = QLabel("All installed models run directly on your GPU via Real-ESRGAN Vulkan.")
         self.lbl_download_status.setStyleSheet("color: #94a3b8; font-size: 11px;")
         download_box.addWidget(self.lbl_download_status)
 
@@ -588,57 +659,7 @@ class MainWindow(QMainWindow):
         download_box.addWidget(self.model_download_bar)
         layout.addLayout(download_box)
 
-        # Section 2: Cached TensorRT Engines
-        engines_hdr = QHBoxLayout()
-        engines_title = QLabel("Compiled TensorRT Engine Cache (.engine)")
-        engines_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #f8fafc;")
-        engines_hdr.addWidget(engines_title)
-        engines_hdr.addStretch()
-
-        self.btn_download_engine = QPushButton("Download Engine from URL...")
-        self.btn_download_engine.setStyleSheet("background-color: #0284c7; color: white; font-weight: 600; font-size: 12px; padding: 6px 12px; border-radius: 5px;")
-        self.btn_download_engine.clicked.connect(self._open_download_engine_dialog)
-
-        self.btn_compile_engine = QPushButton("Compile Engine from Model...")
-        self.btn_compile_engine.setStyleSheet("background-color: #059669; color: white; font-weight: 600; font-size: 12px; padding: 6px 12px; border-radius: 5px;")
-        self.btn_compile_engine.clicked.connect(lambda: self._open_compile_engine_dialog())
-
-        self.btn_import_engine = QPushButton("Import .engine...")
-        self.btn_import_engine.setStyleSheet("background-color: #374151; color: white; font-weight: 500; font-size: 12px; padding: 6px 12px; border-radius: 5px;")
-        self.btn_import_engine.clicked.connect(self._import_engine_file)
-
-        self.btn_refresh_engines = QPushButton("Refresh")
-        self.btn_refresh_engines.setStyleSheet("background-color: #374151; color: white; font-weight: 500; font-size: 12px; padding: 6px 12px; border-radius: 5px;")
-        self.btn_refresh_engines.clicked.connect(self._refresh_engines_table)
-
-        self.btn_delete_engine = QPushButton("Delete Selected")
-        self.btn_delete_engine.setStyleSheet("background-color: #991b1b; color: white; font-weight: 500; font-size: 12px; padding: 6px 12px; border-radius: 5px;")
-        self.btn_delete_engine.clicked.connect(self._delete_selected_engine)
-
-        engines_hdr.addWidget(self.btn_download_engine)
-        engines_hdr.addWidget(self.btn_compile_engine)
-        engines_hdr.addWidget(self.btn_import_engine)
-        engines_hdr.addWidget(self.btn_refresh_engines)
-        engines_hdr.addWidget(self.btn_delete_engine)
-        layout.addLayout(engines_hdr)
-
-        self.table_engines = QTableWidget()
-        self.table_engines.setColumnCount(6)
-        self.table_engines.setHorizontalHeaderLabels([
-            "Model", "Cache Key", "Resolution", "Precision", "Tiles", "File Size"
-        ])
-        self.table_engines.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.table_engines.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.table_engines.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.table_engines.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.table_engines.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self.table_engines.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        self.table_engines.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table_engines.verticalHeader().setDefaultSectionSize(44)
-        layout.addWidget(self.table_engines, 1)
-
         self._refresh_models_table()
-        self._refresh_engines_table()
 
         return tab
 
@@ -695,33 +716,75 @@ class MainWindow(QMainWindow):
         self._on_model_selection_changed(self.combo_model.currentText())
 
     def _get_engine_display_name(self, model_name: str, res: tuple[int, int] = (1920, 1080)) -> str:
-        """Determine human-friendly display name of the engine that will run for this model."""
-        engine_info = self.cache_mgr.get_engine_info(model_name, res, fp16=True)
-        from core.vapoursynth_builder import is_vspipe_available
+        """Determine human-friendly display name of the GPU engine."""
         from core.ai_upscaler import is_ai_binary_available
-
-        is_onnx_ready = (
-            engine_info.source_model_path is not None
-            and engine_info.source_model_path.lower().endswith(".onnx")
-            and self.cache_mgr.is_trtexec_available()
-        )
-        if (engine_info.exists or is_onnx_ready) and is_vspipe_available():
-            return "TensorRT (GPU)"
-        elif is_ai_binary_available():
+        if is_ai_binary_available():
             return "Real-ESRGAN Vulkan"
         return "FFmpeg CAS"
+
+    def _format_model_guide_html(self, entry: PretrainedModelEntry) -> str:
+        return (
+            f"<div style='line-height: 1.45;'>"
+            f"<p style='margin: 0 0 4px 0; color: #f8fafc;'>"
+            f"<b style='color: #38bdf8;'>Best For:</b> {entry.best_for}</p>"
+            f"<p style='margin: 0 0 4px 0; color: #86efac;'>"
+            f"<b>Good (Pros):</b> {entry.pros}</p>"
+            f"<p style='margin: 0; color: #fca5a5;'>"
+            f"<b>Trade-offs (Cons):</b> {entry.cons}</p>"
+            f"</div>"
+        )
+
+    def _apply_recommended_denoise_for_current_model(self):
+        model_name = self.combo_model.currentText().split()[0]
+        entry = self.model_mgr.find_model_entry(model_name)
+        if entry and hasattr(self, "slider_denoise_strength"):
+            target_val = int(round(entry.recommended_denoise * 10))
+            self.slider_denoise_strength.setValue(target_val)
+            self.log(f"Applied recommended Denoise & Deblock Strength ({entry.recommended_denoise:.1f}) for {entry.name}")
 
     def _on_model_selection_changed(self, model_txt: str):
         model_name = model_txt.split()[0]
         if hasattr(self, "lbl_selected_model"):
             self.lbl_selected_model.setText(f"Selected Model: {model_name}")
         if hasattr(self, "card_engine") and (not hasattr(self, "queue_controller") or not self.queue_controller._is_running):
-            res = (1920, 1080)
-            if hasattr(self, "queue_controller") and self.queue_controller.jobs:
-                j = self.queue_controller.jobs[0]
-                if j.media_info and j.media_info.width > 0:
-                    res = (j.media_info.width, j.media_info.height)
-            self.card_engine.set_value(self._get_engine_display_name(model_name, res=res))
+            self.card_engine.set_value(self._get_engine_display_name(model_name))
+
+        entry = self.model_mgr.find_model_entry(model_name)
+        if entry and hasattr(self, "lbl_guide_body"):
+            self.lbl_guide_title.setText(
+                f"{entry.name}  |  Speed: {entry.speed_tier}  |  Recommended Denoise: {entry.recommended_denoise:.1f}"
+            )
+            self.lbl_guide_body.setText(self._format_model_guide_html(entry))
+            if hasattr(self, "btn_apply_rec_denoise"):
+                self.btn_apply_rec_denoise.setText(f"Apply Recommended Denoise ({entry.recommended_denoise:.1f})")
+
+    def _on_catalog_table_selection_changed(self):
+        catalog = self.model_mgr.list_catalog()
+        if not catalog or not hasattr(self, "lbl_catalog_guide_body"):
+            return
+        selected_rows = self.table_models.selectionModel().selectedRows() if self.table_models.selectionModel() else []
+        row = selected_rows[0].row() if selected_rows else 0
+        if 0 <= row < len(catalog):
+            entry = catalog[row]
+            self.lbl_catalog_guide_title.setText(
+                f"{entry.name} ({entry.category})  —  Speed: {entry.speed_tier}  |  Recommended Denoise: {entry.recommended_denoise:.1f}"
+            )
+            self.lbl_catalog_guide_body.setText(self._format_model_guide_html(entry))
+
+    def _use_selected_catalog_model(self):
+        catalog = self.model_mgr.list_catalog()
+        selected_rows = self.table_models.selectionModel().selectedRows() if self.table_models.selectionModel() else []
+        row = selected_rows[0].row() if selected_rows else 0
+        if 0 <= row < len(catalog):
+            entry = catalog[row]
+            stem = Path(entry.filename).stem.lower().replace("-x4", "")
+            for idx in range(self.combo_model.count()):
+                item_token = self.combo_model.itemText(idx).split()[0].lower()
+                if item_token == Path(entry.filename).stem.lower() or stem in item_token:
+                    self.combo_model.setCurrentIndex(idx)
+                    break
+            self._apply_recommended_denoise_for_current_model()
+            self.tabs.setCurrentIndex(1)
 
     def log(self, message: str):
         timestamp = QTime.currentTime().toString("hh:mm:ss")
@@ -735,6 +798,11 @@ class MainWindow(QMainWindow):
     def _on_blend_changed(self, val: int):
         self.lbl_blend.setText(f"Micro-Texture Blend: {val}% AI / {100 - val}% Original")
 
+    def _on_denoise_strength_changed(self, val: int):
+        strength = val / 10.0
+        level = "Light" if strength < 1.5 else ("Medium" if strength < 2.1 else ("Strong Old-Video Cleanup" if strength < 3.1 else "Heavy Degraded Restoration"))
+        self.lbl_denoise_strength.setText(f"Denoise & Deblock Strength: {strength:.1f} ({level})")
+
     def _on_grain_changed(self, val: int):
         self.lbl_grain.setText(f"Dynamic Film Grain: {val} ({'Off' if val == 0 else 'Subtle' if val < 10 else 'Medium'})")
 
@@ -746,10 +814,10 @@ class MainWindow(QMainWindow):
             self.log(f"Saved logs to: {chosen}")
 
     # -------------------------------------------------------------
-    # AI Model Downloader & TensorRT Engine Management
+    # AI Model Downloader Management
     # -------------------------------------------------------------
     def _refresh_models_table(self):
-        """Populate the AI model catalog table with prominent download, build, and delete buttons."""
+        """Populate the AI model catalog table with download and delete actions."""
         catalog = self.model_mgr.list_catalog()
         self.table_models.setRowCount(len(catalog))
         for row, entry in enumerate(catalog):
@@ -768,29 +836,13 @@ class MainWindow(QMainWindow):
             action_layout.setSpacing(8)
 
             if entry.installed:
-                if entry.filename.lower().endswith(".onnx"):
-                    btn_build = QPushButton("Build Engine")
-                    btn_build.setStyleSheet(
-                        "background-color: #059669; color: #ffffff; font-weight: 600; font-size: 12px; "
-                        "padding: 6px 12px; border-radius: 5px; min-height: 28px;"
-                    )
-                    btn_build.clicked.connect(lambda _, fn=entry.filename: self._open_compile_engine_dialog(default_model=fn))
-                    action_layout.addWidget(btn_build)
-                else:
-                    btn_info = QPushButton("Vulkan GPU Ready")
-                    btn_info.setStyleSheet(
-                        "background-color: #1e293b; color: #38bdf8; border: 1px solid #0284c7; "
-                        "font-weight: 600; font-size: 11px; padding: 6px 8px; border-radius: 5px; min-height: 28px;"
-                    )
-                    btn_info.setToolTip("PyTorch model weights run directly via native Vulkan GPU engine (no TensorRT compilation required).")
-                    btn_info.clicked.connect(lambda _, fn=entry.filename: QMessageBox.information(
-                        self,
-                        "Model Ready for GPU Upscaling",
-                        f"'{fn}' is a PyTorch neural network model.\n\n"
-                        "It is ready to use immediately! RemasterGO runs it using the native Real-ESRGAN Vulkan GPU pipeline on your GPU.\n\n"
-                        "To compile a TensorRT .engine binary instead, please use an ONNX model (e.g. 'Real-ESRGAN General x4 (ONNX)')."
-                    ))
-                    action_layout.addWidget(btn_info)
+                btn_info = QPushButton("Vulkan GPU Ready")
+                btn_info.setStyleSheet(
+                    "background-color: #1e293b; color: #38bdf8; border: 1px solid #0284c7; "
+                    "font-weight: 600; font-size: 11px; padding: 6px 8px; border-radius: 5px; min-height: 28px;"
+                )
+                btn_info.setToolTip("Model is installed and ready for native Vulkan GPU upscaling.")
+                action_layout.addWidget(btn_info)
 
                 btn_del = QPushButton("Delete")
                 btn_del.setStyleSheet(
@@ -810,176 +862,15 @@ class MainWindow(QMainWindow):
 
             self.table_models.setCellWidget(row, 5, action_widget)
 
-    def _open_download_engine_dialog(self):
-        """Open dialog to download a precompiled TensorRT .engine binary or ONNX model."""
-        dlg = DownloadEngineDialog(self)
-        if dlg.exec():
-            data = dlg.get_data()
-            url = data["url"]
-            model_name = data["model_name"]
-            res = data["resolution"]
-            fp16 = data["fp16"]
-            cache_key = self.cache_mgr.compute_cache_key(model_name, res, fp16=fp16)
+            row_tip = self._format_model_guide_html(entry)
+            for col in range(5):
+                it = self.table_models.item(row, col)
+                if it:
+                    it.setToolTip(row_tip)
 
-            # Route target path according to file type
-            clean_url = url.split("?")[0].lower()
-            if clean_url.endswith(".onnx") or clean_url.endswith(".pth") or clean_url.endswith(".bin"):
-                fname = Path(url.split("?")[0]).name
-                target_path = str(self.model_mgr.models_dir / fname)
-            else:
-                target_path = str(self.cache_mgr.cache_dir / f"{cache_key}.engine")
-
-            self.model_download_bar.setValue(0)
-            self.lbl_download_status.setText(f"Starting download of {model_name}...")
-            self.log(f"Downloading from: {url}")
-
-            self.active_engine_worker = EngineDownloadWorker(
-                url=url,
-                target_engine_path=target_path,
-                parent=self
-            )
-            self.active_engine_worker.sig_progress.connect(self._on_engine_download_progress)
-            self.active_engine_worker.sig_status.connect(lambda s: self.lbl_download_status.setText(s))
-            self.active_engine_worker.sig_finished.connect(
-                lambda p: self._on_engine_download_finished(p, model_name, res, fp16, cache_key)
-            )
-            self.active_engine_worker.sig_error.connect(self._on_engine_download_error)
-            self.active_engine_worker.start()
-
-    def _on_engine_download_progress(self, downloaded: int, total: int, pct: float):
-        self.model_download_bar.setValue(int(pct))
-        dl_mb = downloaded / (1024 * 1024)
-        if total > 0:
-            tot_mb = total / (1024 * 1024)
-            self.lbl_download_status.setText(f"Downloading: {dl_mb:.1f} MB / {tot_mb:.1f} MB ({pct:.1f}%)")
-        else:
-            self.lbl_download_status.setText(f"Downloading: {dl_mb:.1f} MB downloaded")
-
-    def _on_engine_download_finished(self, local_path: str, model_name: str, res: tuple[int, int], fp16: bool, cache_key: str):
-        self.model_download_bar.setValue(100)
-        self.lbl_download_status.setText(f"File ready: {Path(local_path).name}")
-        self.log(f"Download ready: {local_path}")
-
-        if local_path.lower().endswith(".engine"):
-            info = self.cache_mgr.register_engine(
-                source_engine_file=local_path,
-                model_name=model_name,
-                input_resolution=res,
-                fp16=fp16
-            )
-            self._refresh_engines_table()
-            QMessageBox.information(
-                self,
-                "Engine Download Successful",
-                f"Successfully downloaded and registered TensorRT engine:\n{Path(local_path).name}\n\nKey: {info.cache_key}\nGPU Architecture: {info.gpu_name}"
-            )
-        else:
-            self._refresh_models_table()
-            QMessageBox.information(
-                self,
-                "Model Download Successful",
-                f"Successfully downloaded AI model:\n{Path(local_path).name}\n\nSaved to cache/models/.\nYou can now click 'Build Engine' to compile it into a TensorRT engine."
-            )
-
-    def _on_engine_download_error(self, err: str):
-        self.lbl_download_status.setText(f"Engine download failed: {err}")
-        self.log(f"Engine download error: {err}")
-        QMessageBox.critical(self, "Engine Download Failed", f"Could not download engine binary:\n{err}")
-
-    def _open_compile_engine_dialog(self, default_model: str = "", default_resolution: Optional[tuple[int, int]] = None):
-        """Open dialog to compile an ONNX model into a TensorRT .engine binary."""
-        onnx_files = sorted([
-            p.name for p in self.model_mgr.models_dir.glob("*.onnx")
-            if p.is_file()
-        ])
-        other_files = sorted([
-            p.name for p in self.model_mgr.models_dir.glob("*")
-            if p.is_file() and p.suffix.lower() in (".pth", ".bin")
-        ])
-        available_files = onnx_files if onnx_files else (onnx_files + other_files)
-        trtexec_avail = self.cache_mgr.is_trtexec_available()
-        trtexec_bin = self.cache_mgr.get_trtexec_binary()
-
-        # If default_model is not in available_files, pick the first ONNX model if available
-        if default_model not in available_files and onnx_files:
-            default_model = onnx_files[0]
-
-        if default_resolution is None:
-            # Auto-suggest resolution from queue if available
-            if self.queue_controller.jobs:
-                job = self.queue_controller.jobs[0]
-                if job.media_info and job.media_info.width > 0 and job.media_info.height > 0:
-                    default_resolution = (job.media_info.width, job.media_info.height)
-            if default_resolution is None:
-                default_resolution = (1920, 1080)
-
-        dlg = CompileEngineDialog(
-            available_models=available_files,
-            default_model=default_model,
-            default_resolution=default_resolution,
-            trtexec_available=trtexec_avail,
-            trtexec_path=trtexec_bin,
-            parent=self
-        )
-
-        res_code = dlg.exec()
-        if dlg.switch_to_download:
-            self._open_download_engine_dialog()
-            return
-
-        if dlg.custom_trtexec_path:
-            self.cache_mgr.custom_trtexec_path = dlg.custom_trtexec_path
-
-        if res_code:
-            data = dlg.get_data()
-            fn = data["model_filename"]
-            res = data["resolution"]
-            fp16 = data["fp16"]
-            ws = data["workspace_mb"]
-            model_path = str(self.model_mgr.models_dir / fn)
-            model_name = Path(fn).stem
-
-            self.log(f"Compiling TensorRT engine for {model_name} at {res[0]}x{res[1]} (FP16={fp16}, Workspace={ws}MB)...")
-            try:
-                info = self.cache_mgr.compile_engine(
-                    onnx_model_path=model_path,
-                    model_name=model_name,
-                    input_resolution=res,
-                    fp16=fp16,
-                    max_workspace_mb=ws
-                )
-                self._refresh_engines_table()
-                self.log(f"Compilation finished! Saved to {Path(info.engine_path).name}")
-                QMessageBox.information(
-                    self, "Compilation Complete", f"TensorRT engine compiled successfully:\n{Path(info.engine_path).name}"
-                )
-            except Exception as e:
-                self.log(f"Compilation error: {e}")
-                QMessageBox.critical(self, "Compilation Error", f"Could not compile TensorRT engine:\n\n{e}")
-
-    def _import_engine_file(self):
-        """Import an existing local .engine file into the cache."""
-        chosen, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select TensorRT Engine File",
-            str(Path.cwd()),
-            "TensorRT Engine Files (*.engine);;All Files (*.*)"
-        )
-        if chosen:
-            stem = Path(chosen).stem
-            info = self.cache_mgr.register_engine(
-                source_engine_file=chosen,
-                model_name=stem,
-                input_resolution=(1920, 1080),
-                fp16=True
-            )
-            self._refresh_engines_table()
-            self.log(f"Imported and registered TensorRT engine: {Path(chosen).name} (Key: {info.cache_key})")
-            QMessageBox.information(
-                self,
-                "Engine Imported",
-                f"Successfully imported and registered TensorRT engine:\n{Path(chosen).name}\n\nKey: {info.cache_key}"
-            )
+        if self.table_models.rowCount() > 0 and not self.table_models.selectionModel().selectedRows():
+            self.table_models.selectRow(0)
+        self._on_catalog_table_selection_changed()
 
     def _download_model(self, model_entry: PretrainedModelEntry):
         """Initiate asynchronous download of a pretrained model file."""
@@ -1037,36 +928,6 @@ class MainWindow(QMainWindow):
             self.log(f"Deleted model: {model_id}")
             self._refresh_models_table()
 
-    def _refresh_engines_table(self):
-        """Populate the cached TensorRT engines table."""
-        engines = self.cache_mgr.list_cached_engines()
-        self.table_engines.setRowCount(len(engines))
-        for row, eng in enumerate(engines):
-            self.table_engines.setItem(row, 0, QTableWidgetItem(eng.model_name))
-            self.table_engines.setItem(row, 1, QTableWidgetItem(eng.cache_key))
-            self.table_engines.setItem(row, 2, QTableWidgetItem(f"{eng.resolution[0]}x{eng.resolution[1]}"))
-            self.table_engines.setItem(row, 3, QTableWidgetItem("FP16" if eng.fp16 else "FP32"))
-            self.table_engines.setItem(row, 4, QTableWidgetItem(f"{eng.tiles}x{eng.tiles}" if eng.tiles > 1 else "1 (No Tiling)"))
-            size_mb = eng.file_size_bytes / (1024 * 1024)
-            self.table_engines.setItem(row, 5, QTableWidgetItem(f"{size_mb:.1f} MB"))
-
-    def _delete_selected_engine(self):
-        selected_rows = self.table_engines.selectionModel().selectedRows()
-        if not selected_rows:
-            return
-        row = selected_rows[0].row()
-        cache_key = self.table_engines.item(row, 1).text()
-        confirm = QMessageBox.question(
-            self,
-            "Confirm Delete",
-            f"Are you sure you want to delete cached engine {cache_key}?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        if confirm == QMessageBox.StandardButton.Yes:
-            self.cache_mgr.delete_cached_engine(cache_key)
-            self._refresh_engines_table()
-            self.log(f"Deleted TensorRT engine: {cache_key}")
-
     def _browse_output_dir(self):
         chosen = QFileDialog.getExistingDirectory(self, "Select Output Directory", str(Path.cwd()))
         if chosen:
@@ -1076,10 +937,6 @@ class MainWindow(QMainWindow):
     def _reset_output_dir(self):
         self.custom_output_directory = None
         self.lbl_out_dir.setText("Same as input video location (Default)")
-
-    def _open_engine_cache_inspector(self):
-        dlg = EngineCacheInspectorDialog(self.cache_mgr, self)
-        dlg.exec()
 
     def _open_file_dialog(self):
         files, _ = QFileDialog.getOpenFileNames(
@@ -1097,6 +954,7 @@ class MainWindow(QMainWindow):
         enc_name = self.combo_encoder.currentText().split()[0]
         blend_ratio = self.slider_blend.value() / 100.0
         grain = self.slider_grain.value()
+        denoise_str = self.slider_denoise_strength.value() / 10.0 if hasattr(self, "slider_denoise_strength") else 2.2
         seg_dur = self._get_segment_duration()
 
         for fpath in filepaths:
@@ -1136,8 +994,10 @@ class MainWindow(QMainWindow):
                     target_width=cur_tw,
                     target_height=cur_th,
                     model_name=model_name,
+                    tta_mode=self.chk_tta.isChecked() if hasattr(self, "chk_tta") else False,
                     deinterlace=self.chk_deinterlace.isChecked() and media.video.is_interlaced if media.video else False,
                     denoise=self.chk_denoise.isChecked(),
+                    denoise_strength=denoise_str,
                     blend_ai_ratio=blend_ratio,
                     film_grain_intensity=grain,
                     encoder=enc_name,
@@ -1276,9 +1136,7 @@ class MainWindow(QMainWindow):
     def _on_job_progress(self, job_id: str, cur_frame: int, total_frames: int, fps: float, stage: str):
         self.card_frame.set_value(f"{cur_frame:,} / {total_frames:,}")
         self.card_fps.set_value(f"{fps:.1f}" if fps > 0 else "--")
-        if "TensorRT" in stage:
-            self.card_engine.set_value("TensorRT (GPU)")
-        elif "AI Upscaling" in stage or "Real-ESRGAN" in stage:
+        if "AI Upscaling" in stage or "Real-ESRGAN" in stage:
             self.card_engine.set_value("Real-ESRGAN Vulkan")
         elif "Encoding" in stage:
             self.card_engine.set_value("Video Encoder")

@@ -121,6 +121,10 @@ def test_ffmpeg_cmd_parameters():
     assert "30.0000" in cmd
     assert "-c:v" in cmd
     assert "hevc_nvenc" in cmd
+    assert "-rc" in cmd
+    assert "vbr" in cmd
+    assert "-spatial-aq" in cmd
+    assert "-temporal-aq" in cmd
     assert "-cq" in cmd
     assert "18" in cmd
     assert "-metadata:s:v:0" in cmd

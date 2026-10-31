@@ -13,7 +13,6 @@ from pathlib import Path
 from PySide6.QtCore import QCoreApplication, Qt
 from PySide6.QtWidgets import QApplication
 
-from core.cache_manager import EngineCacheManager
 from core.model_downloader import ModelManager
 from core.pipeline import PipelineWorker
 from core.probe import StrategyConfig, detect_scene_cuts, probe_media
@@ -73,86 +72,6 @@ def download_model_cli(model_id: str) -> int:
             return 1
 
     return 0
-
-
-def list_engines_cli() -> int:
-    """List compiled TensorRT engines in the cache."""
-    cache_mgr = EngineCacheManager()
-    engines = cache_mgr.list_cached_engines()
-    print("=" * 80)
-    print(f"TensorRT Engine Cache (GPU: {cache_mgr.gpu_name})")
-    print(f"Cache Directory: {cache_mgr.cache_dir.resolve()}")
-    print("-" * 80)
-    if not engines:
-        print("No compiled TensorRT engines found in cache/engines/.")
-    else:
-        print(f"{'Model':<22} {'Cache Key':<34} {'Res':<10} {'Prec':<6} {'Size':<10}")
-        print("-" * 80)
-        for e in engines:
-            sz_mb = e.file_size_bytes / (1024 * 1024)
-            prec = "FP16" if e.fp16 else "FP32"
-            res = f"{e.resolution[0]}x{e.resolution[1]}"
-            print(f"{e.model_name[:21]:<22} {e.cache_key:<34} {res:<10} {prec:<6} {sz_mb:5.1f} MB")
-    print("=" * 80)
-    return 0
-
-
-def build_engine_cli(model_input: str, resolution_str: str = "1920x1080", fp16: bool = True, workspace_mb: int = 2048) -> int:
-    """Compile an ONNX model into a TensorRT .engine binary."""
-    cache_mgr = EngineCacheManager()
-    model_mgr = ModelManager()
-
-    # Parse resolution
-    parts = resolution_str.lower().split("x")
-    tw, th = int(parts[0]), int(parts[1])
-
-    # Find model file
-    model_path = None
-    if os.path.isfile(model_input):
-        model_path = os.path.abspath(model_input)
-    else:
-        # Check in models dir
-        candidate = model_mgr.models_dir / model_input
-        if candidate.is_file():
-            model_path = str(candidate)
-        else:
-            # Check catalog by id
-            entry = model_mgr.get_model(model_input)
-            if entry and entry.local_path:
-                model_path = entry.local_path
-
-    if not model_path:
-        print(f"Error: Could not locate model '{model_input}'.", file=sys.stderr)
-        print(f"Please check cache/models/ or download it using --download-model.")
-        return 1
-
-    model_name = Path(model_path).stem
-    print("=" * 70)
-    print("TensorRT Engine Compilation")
-    print("=" * 70)
-    print(f"Source Model: {model_path}")
-    print(f"Resolution:   {tw}x{th}")
-    print(f"Precision:    {'FP16' if fp16 else 'FP32'}")
-    print(f"GPU:          {cache_mgr.gpu_name}")
-    print(f"Workspace:    {workspace_mb} MB")
-    print("=" * 70)
-
-    try:
-        info = cache_mgr.compile_engine(
-            onnx_model_path=model_path,
-            model_name=model_name,
-            input_resolution=(tw, th),
-            fp16=fp16,
-            max_workspace_mb=workspace_mb
-        )
-        print(f"\nCompilation Successful!")
-        print(f"Engine Path: {info.engine_path}")
-        print(f"Cache Key:   {info.cache_key}")
-        print(f"Size:        {info.file_size_bytes / (1024 * 1024):.1f} MB")
-        return 0
-    except Exception as e:
-        print(f"\nCompilation Failed: {e}", file=sys.stderr)
-        return 1
 
 
 def run_cli(args: argparse.Namespace) -> int:
@@ -240,8 +159,10 @@ def run_cli(args: argparse.Namespace) -> int:
         target_width=tw,
         target_height=th,
         model_name=args.model,
+        tta_mode=getattr(args, "tta", False),
         deinterlace=deinterlace,
         denoise=not args.no_denoise,
+        denoise_strength=getattr(args, "denoise_strength", 2.2),
         blend_ai_ratio=args.blend,
         film_grain_intensity=args.grain,
         encoder=args.encoder,
@@ -329,22 +250,20 @@ def main() -> int:
     parser.add_argument("-o", "--output", type=str, help="Target output video file path (enforced .mkv, default: input video location)")
     parser.add_argument("-s", "--scale", type=float, default=None, help="Scale factor multiplier relative to source video (e.g. 2 for 2x, 4 for 4x). Overrides -r.")
     parser.add_argument("-r", "--resolution", type=str, default="1920x1080", help="Target resolution (e.g. 1920x1080, 2560x1440, 3840x2160, or 2x/4x)")
-    parser.add_argument("-m", "--model", type=str, default="Real-ESRGAN_x4", help="AI model name")
+    parser.add_argument("-m", "--model", type=str, default="Nomos2_OTF_ESRGAN_x4", help="AI model name")
+    parser.add_argument("--tta", action="store_true", help="Enable 8x Test-Time Augmentation (TTA) for maximum final video quality")
     parser.add_argument("-e", "--encoder", type=str, default="hevc_nvenc", help="Video encoder (hevc_nvenc, h264_nvenc, libx265, libx264)")
-    parser.add_argument("-b", "--blend", type=float, default=0.8, help="AI to original texture blend ratio (0.0 to 1.0)")
-    parser.add_argument("-g", "--grain", type=int, default=6, help="Dynamic film grain intensity (0 to 20)")
+    parser.add_argument("-b", "--blend", type=float, default=1.0, help="AI to original texture blend ratio (0.0 to 1.0)")
+    parser.add_argument("-g", "--grain", type=int, default=0, help="Dynamic film grain intensity (0 to 20)")
+    parser.add_argument("--denoise-strength", type=float, default=2.2, help="Pre-AI denoise and deblock strength (0.5 to 4.0, default: 2.2)")
     parser.add_argument("-c", "--chunk-duration", type=float, default=300.0, help="Segment checkpoint duration in seconds (0 to disable)")
     parser.add_argument("--deinterlace", action="store_true", help="Force deinterlacing on")
     parser.add_argument("--no-denoise", action="store_true", help="Disable spatial/temporal denoising")
     parser.add_argument("--scene-cuts", action="store_true", help="Detect scene cut boundaries and snap checkpoints")
 
-    # Model and engine management options
+    # Model management options
     parser.add_argument("--list-models", action="store_true", help="List available and installed pretrained AI models")
     parser.add_argument("--download-model", type=str, metavar="MODEL_ID", help="Download a model by ID or 'all'")
-    parser.add_argument("--list-engines", action="store_true", help="List compiled TensorRT engines in cache/engines/")
-    parser.add_argument("--build-engine", type=str, metavar="MODEL_FILE", help="Compile an ONNX model into a TensorRT .engine binary")
-    parser.add_argument("--fp32", action="store_true", help="Use FP32 instead of default FP16 when building engine")
-    parser.add_argument("--workspace-mb", type=int, default=2048, help="Max workspace memory in MB for TensorRT compilation (default: 2048)")
 
     args = parser.parse_args()
 
@@ -353,17 +272,6 @@ def main() -> int:
 
     if args.download_model:
         return download_model_cli(args.download_model)
-
-    if args.list_engines:
-        return list_engines_cli()
-
-    if args.build_engine:
-        return build_engine_cli(
-            model_input=args.build_engine,
-            resolution_str=args.resolution,
-            fp16=not args.fp32,
-            workspace_mb=args.workspace_mb
-        )
 
     if args.cli or args.input:
         if not args.input:

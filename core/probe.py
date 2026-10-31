@@ -19,12 +19,14 @@ def get_binary_path(name: str) -> str:
     if local_binary.is_file():
         return str(local_binary)
 
-    # Check active Python environment site-packages and Scripts
+    # Check active Python environment site-packages and Scripts, plus workspace .venv/venv
     import sys
     py_env_dir = Path(sys.prefix)
     py_candidates = [
         py_env_dir / "Scripts" / (f"{name}.exe" if os.name == "nt" else name),
         py_env_dir / "Lib" / "site-packages" / "vapoursynth" / (f"{name}.exe" if os.name == "nt" else name),
+        current_dir / ".venv" / "Scripts" / (f"{name}.exe" if os.name == "nt" else name),
+        current_dir / "venv" / "Scripts" / (f"{name}.exe" if os.name == "nt" else name),
     ]
     for pc in py_candidates:
         if pc.is_file():
@@ -34,8 +36,6 @@ def get_binary_path(name: str) -> str:
     bin_candidates = [
         current_dir / "bin" / (f"{name}.exe" if os.name == "nt" else name),
         current_dir / "bin" / name / (f"{name}.exe" if os.name == "nt" else name),
-        current_dir / "bin" / "vapoursynth" / (f"{name}.exe" if os.name == "nt" else name),
-        current_dir / "bin" / "trtexec" / (f"{name}.exe" if os.name == "nt" else name),
         current_dir / "bin" / "realesrgan" / (f"{name}.exe" if os.name == "nt" else name),
     ]
     for bc in bin_candidates:
@@ -52,23 +52,24 @@ def get_binary_path(name: str) -> str:
                 if candidate.is_file():
                     return str(candidate)
 
-    # Check common system install locations on Windows (e.g. for VapourSynth)
-    if os.name == "nt":
-        std_paths = [
-            Path(r"C:\Program Files\VapourSynth") / f"{name}.exe",
-            Path(r"C:\Program Files\VapourSynth\core") / f"{name}.exe",
-            Path(r"C:\Program Files (x86)\VapourSynth") / f"{name}.exe",
-            Path(r"C:\Program Files (x86)\VapourSynth\core") / f"{name}.exe",
-        ]
-        for sp in std_paths:
-            if sp.is_file():
-                return str(sp)
-
     system_binary = shutil.which(name)
     if system_binary:
         return system_binary
 
     return name
+
+
+def detect_gpu_name() -> str:
+    """Query GPU name via nvidia-smi with fallback to generic Vulkan GPU identifier."""
+    try:
+        cmd = ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"]
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        gpu = res.stdout.strip().splitlines()[0]
+        if gpu:
+            return gpu
+    except Exception:
+        pass
+    return "Vulkan Compatible GPU"
 
 
 @dataclass
@@ -178,16 +179,17 @@ class StrategyConfig:
     output_path: str
     target_width: int = 1920
     target_height: int = 1080
-    model_name: str = "Real-ESRGAN_x4"
+    model_name: str = "Nomos2_OTF_ESRGAN_x4"
+    tta_mode: bool = False
     deinterlace: bool = False
     field_order: str = "progressive"  # "progressive", "tff", "bff"
     denoise: bool = True
-    denoise_strength: float = 1.2
-    blend_ai_ratio: float = 0.8
-    film_grain_intensity: int = 6
+    denoise_strength: float = 2.2
+    blend_ai_ratio: float = 1.0
+    film_grain_intensity: int = 0
     encoder: str = "hevc_nvenc"
-    cq: int = 18
-    preset: str = "p6"
+    cq: int = 16
+    preset: str = "p7"
     segment_duration_sec: float = 300.0
     scene_cuts: List[SceneBoundary] = field(default_factory=list)
 
@@ -404,10 +406,10 @@ def create_strategy(
     target_width: int = 1920,
     target_height: int = 1080,
     scale_factor: Optional[float] = None,
-    model_name: str = "Real-ESRGAN_x4",
+    model_name: str = "Nomos2_OTF_ESRGAN_x4",
     encoder: str = "hevc_nvenc",
-    blend_ai_ratio: float = 0.8,
-    film_grain: int = 6,
+    blend_ai_ratio: float = 1.0,
+    film_grain: int = 0,
     segment_duration: float = 300.0,
     detect_scenes: bool = False
 ) -> StrategyConfig:

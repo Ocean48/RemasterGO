@@ -6,9 +6,6 @@ from PySide6.QtWidgets import QApplication
 
 from ui.main_window import MainWindow
 from ui.widgets import (
-    CompileEngineDialog,
-    DownloadEngineDialog,
-    EngineCacheInspectorDialog,
     MetricCard,
     StatusBadge,
 )
@@ -36,7 +33,10 @@ def test_main_window_instantiation():
     assert window.card_engine is not None
     assert window.bar_current is not None
     assert window.bar_queue is not None
-    assert "Real-ESRGAN" in window.lbl_selected_model.text() or "realesr" in window.lbl_selected_model.text() or "SPAN" in window.lbl_selected_model.text()
+    assert any(
+        k in window.lbl_selected_model.text()
+        for k in ("uniscale", "ultramix", "high-fidelity", "Nomos", "RealPLKSR", "UltraSharp", "Real-ESRGAN", "realesr", "SPAN")
+    )
     assert window.combo_resolution.count() > 0
     assert window.combo_encoder.count() > 0
 
@@ -54,15 +54,6 @@ def test_main_window_default_output_to_input_location():
     assert Path(job.output_path).name.startswith(f"{selected_model}_")
 
 
-def test_engine_cache_inspector_dialog():
-    app = QApplication.instance() or QApplication(sys.argv)
-    window = MainWindow()
-    dialog = EngineCacheInspectorDialog(window.cache_mgr)
-    assert dialog.windowTitle() == "TensorRT Engine Cache Inspector"
-    assert dialog.table.columnCount() == 6
-    dialog.close()
-
-
 def test_tabbed_ui_navigation():
     app = QApplication.instance() or QApplication(sys.argv)
     window = MainWindow()
@@ -70,66 +61,20 @@ def test_tabbed_ui_navigation():
     tab_names = [window.tabs.tabText(i) for i in range(window.tabs.count())]
     assert "Queue & Processing" in tab_names
     assert "Restoration Settings" in tab_names
-    assert "AI Models & Engines" in tab_names
+    assert "AI Models" in tab_names
     assert "Execution Logs" in tab_names
 
-    # Check model downloader and engines table
+    # Check model downloader table
     assert window.table_models.columnCount() == 6
     assert window.table_models.rowCount() >= 4
-    assert window.table_engines.columnCount() == 6
-
-
-def test_download_engine_dialog():
-    app = QApplication.instance() or QApplication(sys.argv)
-    dlg = DownloadEngineDialog()
-    assert dlg.windowTitle() == "Download Precompiled TensorRT Engine"
-    data = dlg.get_data()
-    assert "url" in data
-    assert "model_name" in data
-    assert data["resolution"] == (1920, 1080)
-    dlg.close()
-
-
-def test_compile_engine_dialog(monkeypatch):
-    app = QApplication.instance() or QApplication(sys.argv)
-    dlg = CompileEngineDialog(
-        available_models=["SPAN_4x.onnx"],
-        default_model="SPAN_4x.onnx",
-        default_resolution=(384, 288)
-    )
-    assert dlg.windowTitle() == "Compile TensorRT Engine"
-    data = dlg.get_data()
-    assert data["model_filename"] == "SPAN_4x.onnx"
-    assert data["resolution"] == (384, 288)
-    assert data["fp16"] is True
-
-    # Test typing custom resolution
-    dlg.spin_width.setValue(640)
-    dlg.spin_height.setValue(480)
-    custom_data = dlg.get_data()
-    assert custom_data["resolution"] == (640, 480)
-
-    # Test preset selection
-    dlg.combo_res_presets.setCurrentIndex(1)  # 1920x1080
-    assert dlg.spin_width.value() == 1920
-    assert dlg.spin_height.value() == 1080
-
-    # Test browse trtexec without exception
-    from PySide6.QtWidgets import QFileDialog
-    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args, **kwargs: ("", ""))
-    dlg._browse_trtexec()
-    dlg.close()
 
 
 def test_cli_helper_commands(capsys):
-    from main import list_engines_cli, list_models_cli
+    from main import list_models_cli
     code_models = list_models_cli()
     assert code_models == 0
     captured = capsys.readouterr()
     assert "Real-ESRGAN x4 Plus" in captured.out
-
-    code_engines = list_engines_cli()
-    assert code_engines == 0
 
 
 def test_restoration_settings_tooltips():
@@ -174,6 +119,32 @@ def test_restoration_settings_tooltips():
     assert "Decrease" in window.combo_segments.toolTip()
 
     assert "Output Destination Directory" in window.lbl_out_dir.toolTip()
+
+
+def test_model_guide_pros_cons_display():
+    app = QApplication.instance() or QApplication(sys.argv)
+    window = MainWindow()
+
+    # Verify initial model guide card in Restoration Settings shows Best For, Good (Pros), and Trade-offs (Cons)
+    assert "Best For:" in window.lbl_guide_body.text()
+    assert "Good (Pros):" in window.lbl_guide_body.text()
+    assert "Trade-offs (Cons):" in window.lbl_guide_body.text()
+
+    # Switch to a different model and verify guide updates dynamically
+    prev_text = window.lbl_guide_body.text()
+    window.combo_model.setCurrentIndex(7)  # ultrasharp-4x
+    assert window.lbl_guide_body.text() != prev_text
+    assert "Best For:" in window.lbl_guide_body.text()
+
+    # Verify Apply Recommended Denoise button updates slider
+    window.btn_apply_rec_denoise.click()
+    assert window.slider_denoise_strength.value() == 15
+
+    # Verify AI Models tab details panel and "Use This Model" button
+    window.table_models.selectRow(1)
+    assert "Best For:" in window.lbl_catalog_guide_body.text()
+    window.btn_use_catalog_model.click()
+    assert window.tabs.currentIndex() == 1
 
 
 
